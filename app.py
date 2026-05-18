@@ -298,11 +298,11 @@ def vista_diario():
             st.caption(f"Avance de la semana: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
-# BLOQUE 4: VISTA - REPORTE DE JEFATURA
+# BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT)
 # ---------------------------------------------------------
 def vista_reportes():
-    st.title("📊 Reporte Consolidado de Planificación")
-    st.markdown("Visión gerencial de los compromisos adquiridos por el equipo de ajustadores.")
+    st.title("📊 Carta Gantt de Planificación Semanal")
+    st.markdown("Visión gerencial estructurada por Casos (Tareas) y Entregables (Subtareas) en la línea de tiempo.")
     
     archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json')]
     
@@ -326,23 +326,63 @@ def vista_reportes():
             pass
 
     if datos_consolidados:
-        df_reporte = pd.DataFrame(datos_consolidados)
+        df_raw = pd.DataFrame(datos_consolidados)
         
-        # Ordenar y limpiar columnas para el reporte
-        columnas_deseadas = ['Ajustador', 'numero_caso', 'asegurado', 'tramo_uf', 'categoria', 'accion', 'fecha_compromiso', 'estado_cumplimiento', 'fecha_ejecucion']
-        columnas_finales = [col for col in columnas_deseadas if col in df_reporte.columns]
-        df_reporte = df_reporte[columnas_finales]
+        # Filtramos solo las tareas operativas para la Carta Gantt principal
+        df_operativa = df_raw[df_raw['categoria'] == 'Operativa'].copy()
         
-        st.dataframe(df_reporte, use_container_width=True)
-        
-        csv = df_reporte.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 DESCARGAR REPORTE CONSOLIDADO (CSV)",
-            data=csv,
-            file_name=f"Reporte_Planificacion_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
+        if not df_operativa.empty:
+            # Asegurar formato de fecha para las columnas
+            df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso']).dt.date
+            
+            # Crear la Matriz Gantt (Filas: Casos, Columnas: Fechas, Celdas: Entregables)
+            df_gantt = df_operativa.pivot_table(
+                index=['Ajustador', 'numero_caso', 'asegurado'], 
+                columns='fecha_compromiso', 
+                values='accion', 
+                aggfunc=lambda x: ' | '.join(x)  # Si un caso tiene 2 entregables el mismo día, los separa con " | "
+            ).fillna('')
+            
+            st.subheader("🛠️ Gantt Operativo (Casos y Documentos)")
+            st.dataframe(df_gantt, use_container_width=True)
+        else:
+            st.info("No hay tareas operativas (casos) planificadas aún.")
 
+        # Detalle de Gestión separado para no ensuciar los casos
+        df_gestion = df_raw[df_raw['categoria'] != 'Operativa'].copy()
+        if not df_gestion.empty:
+            st.subheader("🤝 Gantt de Gestión (Comercial / Administrativa)")
+            df_gestion['fecha_compromiso'] = pd.to_datetime(df_gestion['fecha_compromiso']).dt.date
+            df_gantt_gest = df_gestion.pivot_table(
+                index=['Ajustador', 'categoria'], 
+                columns='fecha_compromiso', 
+                values='accion', 
+                aggfunc=lambda x: ' | '.join(x)
+            ).fillna('')
+            st.dataframe(df_gantt_gest, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("### Opciones de Exportación")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if not df_operativa.empty:
+                csv_gantt = df_gantt.to_csv().encode('utf-8')
+                st.download_button(
+                    label="📥 DESCARGAR GANTT CASOS (Para Excel)",
+                    data=csv_gantt,
+                    file_name=f"Gantt_Casos_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                )
+        with col2:
+            # Archivo crudo total para mantener registro histórico
+            csv_raw = df_raw.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 DESCARGAR DATA BASE BRUTA (Histórico)",
+                data=csv_raw,
+                file_name=f"Data_Bruta_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
 # ---------------------------------------------------------
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
 # ---------------------------------------------------------
