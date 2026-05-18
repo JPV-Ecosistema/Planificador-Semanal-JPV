@@ -45,7 +45,6 @@ def load_master_base():
     uploaded_file = st.sidebar.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
     if uploaded_file is not None:
         try:
-            # Se aplica skiprows=5 para saltar el membrete corporativo y leer encabezados reales
             if uploaded_file.name.endswith('.xlsx'):
                 return pd.read_excel(uploaded_file, skiprows=5)
             else:
@@ -86,6 +85,7 @@ def load_plan_semanal(ajustador):
 def save_plan_actualizado(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR SEMANAL (LUNES)
 # ---------------------------------------------------------
@@ -127,7 +127,7 @@ def vista_planificador():
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas")
-                st.info("💡 Seleccione la categoría, el detalle y la FECHA COMPROMETIDA. Puede registrar hasta 3 acciones por caso.")
+                st.info("💡 Seleccione la categoría, el detalle y la FECHA COMPROMETIDA. Puede ampliar el número de actividades por caso si lo requiere.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -145,7 +145,10 @@ def vista_planificador():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        for i in range(1, 4):
+                        # SOLUCIÓN PUNTO 1: Selector numérico dinámico para cantidad de actividades por caso
+                        num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=3, key=f"num_act_{idx}")
+                        
+                        for i in range(1, int(num_actividades) + 1):
                             colA, colB, colC = st.columns([2, 2, 1])
                             with colA:
                                 cat_accion = st.selectbox(f"Categoría Acción {i}:", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
@@ -223,10 +226,11 @@ def vista_planificador():
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
 # ---------------------------------------------------------
-# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE)
+# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE) -> EVOLUCIONADO
 # ---------------------------------------------------------
 def vista_diario():
-    st.title("☀️ Ejecución Diaria")
+    st.title("☀️ Ejecución Diaria (Programa Diario)")
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
     st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
     
     ajustador_input = st.text_input("Ingrese su nombre de Ajustador (Exacto al Plan Semanal):", placeholder="Ej: Francisco Silva Ghisolfo")
@@ -239,44 +243,76 @@ def vista_diario():
         else:
             st.success("Plan Semanal sincronizado correctamente.")
             st.markdown("---")
-            st.header("📋 Panel de Cumplimiento (Control PM)")
+            
+            # SOLUCIÓN PUNTO 3: Clasificación y priorización por fecha comprometida
+            tareas_hoy = []
+            tareas_resto = []
+            
+            for idx, tarea in enumerate(plan_data):
+                tarea_con_indice = tarea.copy()
+                tarea_con_indice['_posicion_original'] = idx
+                if tarea.get("fecha_compromiso") == hoy_str:
+                    tareas_hoy.append(tarea_con_indice)
+                else:
+                    tareas_resto.append(tarea_con_indice)
             
             total_tareas = len(plan_data)
-            tareas_completadas = 0
+            tareas_completadas = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
             cambios_realizados = False
             
-            with st.form(key="form_cumplimiento"):
-                for idx, tarea in enumerate(plan_data):
-                    estado_actual = tarea.get("estado_cumplimiento", "Pendiente")
-                    es_realizado = (estado_actual == "Realizado")
-                    
-                    if es_realizado:
-                        tareas_completadas += 1
-                        clase_css = "tarea-marco tarea-realizada"
-                        icono = "✅"
-                    else:
-                        clase_css = "tarea-marco"
-                        icono = "⏳"
-                    
-                    st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
-                    
-                    if tarea["categoria"] == "Operativa":
-                        st.markdown(f"**{icono} CASO [{tarea['numero_caso']}]** - {tarea['asegurado']}")
-                        st.markdown(f"<span style='color:gray; font-size:0.9em;'>Tramo: {tarea['tramo_uf']}</span>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"**{icono} {tarea['categoria'].upper()}**")
-                    
-                    st.markdown(f"**Acción:** {tarea['accion']}")
-                    nuevo_estado = st.checkbox(f"Marcar como Realizado", value=es_realizado, key=f"chk_{tarea['id_transaccion']}")
-                    
-                    nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
-                    if nuevo_texto_estado != estado_actual:
-                        plan_data[idx]["estado_cumplimiento"] = nuevo_texto_estado
-                        plan_data[idx]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
-                        cambios_realizados = True
+            with st.form(key="form_cumplimiento_estructurado"):
+                # Segmento Superior Priorizado
+                if tareas_hoy:
+                    st.subheader("🔥 Prioridad para Hoy (Compromisos del Día)")
+                    for t in tareas_hoy:
+                        pos = t['_posicion_original']
+                        estado_actual = t.get("estado_cumplimiento", "Pendiente")
+                        es_realizado = (estado_actual == "Realizado")
+                        clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
+                        icono = "✅" if es_realizado else "⚡"
                         
-                    st.markdown('</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
+                        if t["categoria"] == "Operativa":
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}*")
+                        else:
+                            st.markdown(f"**{icono} {t['categoria'].upper()}**")
+                        st.markdown(f"**Entregable Comprometido:** {t['accion']}")
+                        
+                        nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_hoy_{t['id_transaccion']}")
+                        nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
+                        if nuevo_texto_estado != estado_actual:
+                            plan_data[pos]["estado_cumplimiento"] = nuevo_texto_estado
+                            plan_data[pos]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
+                            cambios_realizados = True
+                        st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy. Abajo se despliega tu planificación semanal.")
 
+                # Segmento Inferior Secundario
+                if tareas_resto:
+                    st.subheader("📅 Resto de la Planificación Semanal")
+                    for t in tareas_resto:
+                        pos = t['_posicion_original']
+                        estado_actual = t.get("estado_cumplimiento", "Pendiente")
+                        es_realizado = (estado_actual == "Realizado")
+                        clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
+                        icono = "✅" if es_realizado else "⏳"
+                        
+                        st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
+                        if t["categoria"] == "Operativa":
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}*")
+                        else:
+                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*")
+                        st.markdown(f"**Entregable Comprometido:** {t['accion']}")
+                        
+                        nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_rest_{t['id_transaccion']}")
+                        nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
+                        if nuevo_texto_estado != estado_actual:
+                            plan_data[pos]["estado_cumplimiento"] = nuevo_texto_estado
+                            plan_data[pos]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
+                            cambios_realizados = True
+                        st.markdown('</div>', unsafe_allow_html=True)
+                
                 st.markdown('<div class="btn-guardar">', unsafe_allow_html=True)
                 submit_button = st.form_submit_button(label="💾 ACTUALIZAR CUMPLIMIENTO DIARIO")
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -285,7 +321,7 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
-                        st.success("¡Cumplimiento actualizado!")
+                        st.success("¡Base de datos local actualizada!")
                         st.experimental_rerun()
                     except Exception as e:
                         st.error(f"Error al escribir en el disco: {e}")
@@ -327,20 +363,15 @@ def vista_reportes():
 
     if datos_consolidados:
         df_raw = pd.DataFrame(datos_consolidados)
-        
-        # Filtramos solo las tareas operativas para la Carta Gantt principal
         df_operativa = df_raw[df_raw['categoria'] == 'Operativa'].copy()
         
         if not df_operativa.empty:
-            # Asegurar formato de fecha para las columnas
             df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso']).dt.date
-            
-            # Crear la Matriz Gantt (Filas: Casos, Columnas: Fechas, Celdas: Entregables)
             df_gantt = df_operativa.pivot_table(
                 index=['Ajustador', 'numero_caso', 'asegurado'], 
                 columns='fecha_compromiso', 
                 values='accion', 
-                aggfunc=lambda x: ' | '.join(x)  # Si un caso tiene 2 entregables el mismo día, los separa con " | "
+                aggfunc=lambda x: ' | '.join(x)
             ).fillna('')
             
             st.subheader("🛠️ Gantt Operativo (Casos y Documentos)")
@@ -348,7 +379,6 @@ def vista_reportes():
         else:
             st.info("No hay tareas operativas (casos) planificadas aún.")
 
-        # Detalle de Gestión separado para no ensuciar los casos
         df_gestion = df_raw[df_raw['categoria'] != 'Operativa'].copy()
         if not df_gestion.empty:
             st.subheader("🤝 Gantt de Gestión (Comercial / Administrativa)")
@@ -365,9 +395,10 @@ def vista_reportes():
         st.markdown("### Opciones de Exportación")
         col1, col2 = st.columns(2)
         
+        # SOLUCIÓN PUNTO 2: Aplicación de encode('utf-8-sig') para legibilidad total en Excel
         with col1:
             if not df_operativa.empty:
-                csv_gantt = df_gantt.to_csv().encode('utf-8')
+                csv_gantt = df_gantt.to_csv().encode('utf-8-sig')
                 st.download_button(
                     label="📥 DESCARGAR GANTT CASOS (Para Excel)",
                     data=csv_gantt,
@@ -375,14 +406,14 @@ def vista_reportes():
                     mime="text/csv",
                 )
         with col2:
-            # Archivo crudo total para mantener registro histórico
-            csv_raw = df_raw.to_csv(index=False).encode('utf-8')
+            csv_raw = df_raw.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
                 label="📥 DESCARGAR DATA BASE BRUTA (Histórico)",
                 data=csv_raw,
                 file_name=f"Data_Bruta_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
             )
+
 # ---------------------------------------------------------
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
 # ---------------------------------------------------------
