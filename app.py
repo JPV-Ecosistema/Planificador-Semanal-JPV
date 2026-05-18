@@ -6,9 +6,9 @@ import uuid
 from datetime import datetime
 
 # ---------------------------------------------------------
-# BLOQUE 0: CONFIGURACIÓN Y PERSISTENCIA (SIN CAMBIOS)
+# BLOQUE 0: CONFIGURACIÓN GENERAL Y PERSISTENCIA
 # ---------------------------------------------------------
-st.set_page_config(page_title="JPV - OpsControl Semanal", layout="wide")
+st.set_page_config(page_title="JPV - OpsControl", layout="wide")
 
 PERSISTENCE_DIR = "persistence"
 
@@ -24,9 +24,12 @@ def apply_custom_styles():
         <style>
         .main { background-color: #f5f7f9; }
         .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004a99; color: white; font-weight: bold;}
+        .btn-guardar>button { background-color: #217346; color: white; width: 100%; height: 3em; margin-top: 20px;}
         .stDataFrame { border: 1px solid #c4ced4; }
         .marco-caso { background-color: white; padding: 15px; border-radius: 5px; border-left: 5px solid #217346; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .marco-gestion { background-color: white; padding: 15px; border-radius: 5px; border-left: 5px solid #004a99; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .tarea-marco { background-color: white; padding: 15px; border-radius: 5px; border-left: 5px solid #004a99; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .tarea-realizada { border-left: 5px solid #217346; opacity: 0.8; }
         h1, h2, h3, h4 { color: #003366; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         </style>
     """, unsafe_allow_html=True)
@@ -35,30 +38,22 @@ init_system()
 apply_custom_styles()
 
 # ---------------------------------------------------------
-# BLOQUE 1: EXTRACCIÓN Y LÓGICA DE TRAMOS (MOTOR SILENCIOSO)
+# BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL
 # ---------------------------------------------------------
 def load_master_base():
-    st.sidebar.header("📁 Carga de Reporte de Acciones")
-    uploaded_file = st.sidebar.file_uploader("Seleccione el archivo (Excel/CSV)", type=["xlsx", "csv"])
-    
+    st.sidebar.header("📁 Base Maestra")
+    uploaded_file = st.sidebar.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
     if uploaded_file is not None:
         try:
             if uploaded_file.name.endswith('.xlsx'):
-                df = pd.read_excel(uploaded_file)
+                return pd.read_excel(uploaded_file)
             else:
-                df = pd.read_csv(uploaded_file)
-            st.sidebar.success(f"Archivo cargado: {uploaded_file.name}")
-            return df
+                return pd.read_csv(uploaded_file)
         except Exception as e:
-            st.sidebar.error(f"Error técnico al leer el archivo: {e}")
-            return None
+            st.sidebar.error(f"Error técnico: {e}")
     return None
 
 def calcular_tramo_uf(fila):
-    """
-    CRITERIO 2: Clasificación silenciosa de tramos.
-    Busca 'Honorarios (UF)' o 'Perdida bruta' y clasifica.
-    """
     valor = 0.0
     if 'Honorarios (UF)' in fila and pd.notna(fila['Honorarios (UF)']):
         try:
@@ -66,7 +61,6 @@ def calcular_tramo_uf(fila):
         except:
             pass
     elif 'Perdida bruta (en moneda del caso)' in fila and pd.notna(fila['Perdida bruta (en moneda del caso)']):
-        # Fallback si solo hay pérdida bruta (asumiendo valor referencial si es necesario)
         try:
              valor = float(fila['Perdida bruta (en moneda del caso)'])
         except:
@@ -79,11 +73,25 @@ def calcular_tramo_uf(fila):
     else:
         return "> 5000 UF"
 
+def load_plan_semanal(ajustador):
+    week_id = get_week_identifier()
+    filename = f"plan_{ajustador.replace(' ', '_')}_{week_id}.json"
+    filepath = os.path.join(PERSISTENCE_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f), filepath
+    return None, None
+
+def save_plan_actualizado(filepath, data):
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
 # ---------------------------------------------------------
-# BLOQUE 2: INTERFAZ Y CONSTRUCCIÓN TRANSACCIONAL
+# BLOQUE 2: VISTA - PLANIFICADOR SEMANAL (LUNES)
 # ---------------------------------------------------------
-def main_planificador():
-    st.title("🗓️ JPV OpsControl - Planificador Semanal")
+def vista_planificador():
+    st.title("🗓️ Planificador Semanal")
+    st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
     
     df_maestro = load_master_base()
     
@@ -94,11 +102,11 @@ def main_planificador():
         ajustador_seleccionado = st.selectbox("Identificación de Ajustador:", [""] + ajustadores_validos)
         
         if ajustador_seleccionado:
-            # CRITERIO 2: Filtro estricto por ajustador asignado
-            casos_vigentes = df_maestro[df_maestro[col_ajustador] == ajustador_seleccionado].copy()
+            casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
             st.markdown("---")
             st.header("1. Selección de Casos Operativos")
+            st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles en la Base Maestra.")
             
             selected_indices = st.multiselect(
                 "Seleccione los casos que intervendrá esta semana:",
@@ -106,7 +114,6 @@ def main_planificador():
                 format_func=lambda x: f"Caso {casos_vigentes.loc[x, 'Número de caso']} - {casos_vigentes.loc[x, 'Asegurado']}"
             )
             
-            # Contenedores para almacenar la data transaccional que construiremos
             plan_transaccional = []
             
             if selected_indices:
@@ -122,7 +129,6 @@ def main_planificador():
                     subestado = fila['Sub estado'] if 'Sub estado' in fila else 'N/D'
                     tramo = calcular_tramo_uf(fila)
                     
-                    # CRITERIO 5: Mostrar estado para contexto sin bloquear nada
                     with st.container():
                         st.markdown(f"""
                         <div class="marco-caso">
@@ -131,9 +137,7 @@ def main_planificador():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # CRITERIO 1 y 4: Texto libre, múltiples líneas = múltiples acciones
-                        acciones_raw = st.text_area(f"Acciones para el caso {caso_num}:", key=f"txt_{idx}", height=100, 
-                                                    placeholder="Ej:\nInspección a la planta\nRedacción de Informe Inicial")
+                        acciones_raw = st.text_area(f"Acciones para el caso {caso_num}:", key=f"txt_{idx}", height=100)
                         
                         if acciones_raw.strip():
                             lineas_acciones = [linea.strip() for linea in acciones_raw.split('\n') if linea.strip()]
@@ -149,9 +153,8 @@ def main_planificador():
                                     "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 })
 
-            # CRITERIO 3: Divisiones para Gestión Comercial y Administrativa
             st.markdown("---")
-            st.header("3. Acciones de Gestión (No asociadas a Siniestros)")
+            st.header("3. Acciones de Gestión")
             col1, col2 = st.columns(2)
             
             with col1:
@@ -162,57 +165,131 @@ def main_planificador():
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
                 admin_raw = st.text_area("Capacitaciones, comités, trámites, etc. (Una por línea):", key="txt_admin", height=150)
             
-            # Procesar Gestión Comercial
             if comercial_raw.strip():
                 for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()),
-                        "categoria": "Gestión Comercial",
-                        "numero_caso": "N/A",
-                        "asegurado": "N/A",
-                        "tramo_uf": "N/A",
-                        "accion": accion,
-                        "estado_cumplimiento": "Pendiente",
-                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
-            # Procesar Gestión Administrativa
             if admin_raw.strip():
                 for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()),
-                        "categoria": "Gestión Administrativa",
-                        "numero_caso": "N/A",
-                        "asegurado": "N/A",
-                        "tramo_uf": "N/A",
-                        "accion": accion,
-                        "estado_cumplimiento": "Pendiente",
-                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
 
-            # Botón de Guardado Final
             st.markdown("---")
             if len(plan_transaccional) > 0:
-                st.info(f"Se han registrado **{len(plan_transaccional)} acciones en total** para esta semana.")
-                if st.button("💾 COMPROMETER PLAN Y GENERAR BASE DE DATOS LOCAL"):
+                st.info(f"Se han registrado **{len(plan_transaccional)} acciones**.")
+                if st.button("💾 COMPROMETER PLAN SEMANAL"):
                     try:
                         week_id = get_week_identifier()
                         filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{week_id}.json"
                         filepath = os.path.join(PERSISTENCE_DIR, filename)
-                        
                         with open(filepath, 'w', encoding='utf-8') as f:
                             json.dump(plan_transaccional, f, ensure_ascii=False, indent=4)
-                            
-                        st.success(f"¡Plan guardado exitosamente!")
-                        st.code(f"Ruta: {filepath}\nEstructura lista para ser consumida por el Programa Diario.", language="text")
+                        st.success("Plan guardado exitosamente.")
                     except Exception as e:
-                        st.error(f"Error al escribir en disco: {e}")
+                        st.error(f"Error: {e}")
             elif selected_indices:
-                st.warning("Debe escribir al menos una acción en los casos seleccionados o en los cuadros de gestión para guardar el plan.")
-        else:
-            st.warning("Selección requerida para iniciar el filtro.")
+                st.warning("Debe escribir al menos una acción para guardar el plan.")
     else:
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
+# ---------------------------------------------------------
+# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE)
+# ---------------------------------------------------------
+def vista_diario():
+    st.title("☀️ Ejecución Diaria")
+    st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
+    
+    ajustador_input = st.text_input("Ingrese su nombre de Ajustador (Exacto al Plan Semanal):", placeholder="Ej: Francisco Silva Ghisolfo")
+    
+    if ajustador_input:
+        plan_data, filepath = load_plan_semanal(ajustador_input)
+        
+        if plan_data is None:
+            st.warning(f"⚠️ No se encontró un Plan Semanal activo para **{ajustador_input}** en la semana en curso.")
+        else:
+            st.success("Plan Semanal sincronizado correctamente.")
+            st.markdown("---")
+            st.header("📋 Panel de Cumplimiento (Control PM)")
+            
+            total_tareas = len(plan_data)
+            tareas_completadas = 0
+            cambios_realizados = False
+            
+            with st.form(key="form_cumplimiento"):
+                for idx, tarea in enumerate(plan_data):
+                    estado_actual = tarea.get("estado_cumplimiento", "Pendiente")
+                    es_realizado = (estado_actual == "Realizado")
+                    
+                    if es_realizado:
+                        tareas_completadas += 1
+                        clase_css = "tarea-marco tarea-realizada"
+                        icono = "✅"
+                    else:
+                        clase_css = "tarea-marco"
+                        icono = "⏳"
+                    
+                    st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
+                    
+                    if tarea["categoria"] == "Operativa":
+                        st.markdown(f"**{icono} CASO [{tarea['numero_caso']}]** - {tarea['asegurado']}")
+                        st.markdown(f"<span style='color:gray; font-size:0.9em;'>Tramo: {tarea['tramo_uf']}</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{icono} {tarea['categoria'].upper()}**")
+                    
+                    st.markdown(f"**Acción:** {tarea['accion']}")
+                    nuevo_estado = st.checkbox(f"Marcar como Realizado", value=es_realizado, key=f"chk_{tarea['id_transaccion']}")
+                    
+                    nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
+                    if nuevo_texto_estado != estado_actual:
+                        plan_data[idx]["estado_cumplimiento"] = nuevo_texto_estado
+                        plan_data[idx]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
+                        cambios_realizados = True
+                        
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                st.markdown('<div class="btn-guardar">', unsafe_allow_html=True)
+                submit_button = st.form_submit_button(label="💾 ACTUALIZAR CUMPLIMIENTO DIARIO")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            if submit_button:
+                if cambios_realizados:
+                    try:
+                        save_plan_actualizado(filepath, plan_data)
+                        st.success("¡Cumplimiento actualizado!")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Error al escribir en el disco: {e}")
+                else:
+                    st.info("No se detectaron cambios.")
+            
+            st.markdown("---")
+            progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
+            st.progress(progreso)
+            st.caption(f"Avance de la semana: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
+
+# ---------------------------------------------------------
+# BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
+# ---------------------------------------------------------
+def main():
+    st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60) # Icono genérico de ingeniería
+    st.sidebar.title("Navegación OpsControl")
+    
+    # Selector de pantalla
+    opcion = st.sidebar.radio(
+        "Ir a:",
+        ["Planificador Semanal", "Programa Diario"]
+    )
+    
+    st.sidebar.markdown("---")
+    
+    # Enrutamiento según la opción seleccionada
+    if opcion == "Planificador Semanal":
+        vista_planificador()
+    elif opcion == "Programa Diario":
+        vista_diario()
+
 if __name__ == "__main__":
-    main_planificador()
+    main()
