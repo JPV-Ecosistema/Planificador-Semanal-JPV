@@ -112,6 +112,10 @@ def vista_planificador():
         if ajustador_seleccionado:
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
+            # Extracción dinámica de Estados y Sub-estados únicos del Excel para las listas desplegables
+            estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
+            subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
+
             st.markdown("---")
             st.header("1. Selección de Casos Operativos")
             st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles en la Base Maestra.")
@@ -126,26 +130,45 @@ def vista_planificador():
             
             if selected_indices:
                 st.markdown("---")
-                st.header("2. Detalle de Acciones Operativas")
-                st.info("💡 Seleccione la categoría, el detalle y la FECHA COMPROMETIDA. Puede ampliar el número de actividades por caso si lo requiere.")
+                st.header("2. Detalle de Acciones Operativas y Proyección de Estado")
+                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado para el cierre de la semana, defina la cantidad de actividades y establezca las fechas de compromiso.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
                     caso_num = fila['Número de caso']
                     asegurado = fila['Asegurado']
-                    estado = fila['Estado'] if 'Estado' in fila else 'N/D'
-                    subestado = fila['Sub estado'] if 'Sub estado' in fila else 'N/D'
+                    estado_actual = str(fila['Estado']) if 'Estado' in fila and pd.notna(fila['Estado']) else "N/D"
+                    subestado_actual = str(fila['Sub estado']) if 'Sub estado' in fila and pd.notna(fila['Sub estado']) else "N/D"
                     tramo = calcular_tramo_uf(fila)
                     
                     with st.container():
                         st.markdown(f"""
                         <div class="marco-caso">
                             <h4>[{caso_num}] {asegurado}</h4>
-                            <p style="color:gray; font-size: 0.9em; margin-bottom: 5px;"><b>Estado:</b> {estado} | <b>Sub-estado:</b> {subestado} | <b>Clasificación:</b> {tramo}</p>
+                            <p style="color:gray; font-size: 0.9em; margin-bottom: 5px;">
+                                <b>Clasificación:</b> {tramo} | <b>Estado en Excel:</b> {estado_actual} | <b>Sub-estado en Excel:</b> {subestado_actual}
+                            </p>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # SOLUCIÓN PUNTO 1: Selector numérico dinámico para cantidad de actividades por caso
+                        # Selectores para mantener o cambiar el Estado y Sub-estado durante la semana
+                        col_est, col_sub = st.columns(2)
+                        with col_est:
+                            opts_est = estados_maestros.copy()
+                            if estado_actual not in opts_est and estado_actual != "N/D":
+                                opts_est.append(estado_actual)
+                            opts_est = sorted(list(set(opts_est)))
+                            default_est_idx = opts_est.index(estado_actual) if estado_actual in opts_est else 0
+                            estado_proyectado = st.selectbox(f"Proyectar Estado Final:", opts_est, index=default_est_idx, key=f"est_proj_{idx}")
+                            
+                        with col_sub:
+                            opts_sub = subestados_maestros.copy()
+                            if subestado_actual not in opts_sub and subestado_actual != "N/D":
+                                opts_sub.append(subestado_actual)
+                            opts_sub = sorted(list(set(opts_sub)))
+                            default_sub_idx = opts_sub.index(subestado_actual) if subestado_actual in opts_sub else 0
+                            subestado_proyectado = st.selectbox(f"Proyectar Sub-estado Final:", opts_sub, index=default_sub_idx, key=f"sub_proj_{idx}")
+
                         num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=3, key=f"num_act_{idx}")
                         
                         for i in range(1, int(num_actividades) + 1):
@@ -175,6 +198,8 @@ def vista_planificador():
                                     "numero_caso": str(caso_num),
                                     "asegurado": str(asegurado),
                                     "tramo_uf": tramo,
+                                    "estado_proyectado": estado_proyectado,
+                                    "subestado_proyectado": subestado_proyectado,
                                     "accion": accion_final,
                                     "fecha_compromiso": fecha_compromiso.strftime("%Y-%m-%d"),
                                     "estado_cumplimiento": "Pendiente",
@@ -198,13 +223,13 @@ def vista_planificador():
             if comercial_raw.strip():
                 for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
             if admin_raw.strip():
                 for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
 
             st.markdown("---")
@@ -226,7 +251,7 @@ def vista_planificador():
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
 # ---------------------------------------------------------
-# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE) -> EVOLUCIONADO
+# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE)
 # ---------------------------------------------------------
 def vista_diario():
     st.title("☀️ Ejecución Diaria (Programa Diario)")
@@ -244,7 +269,6 @@ def vista_diario():
             st.success("Plan Semanal sincronizado correctamente.")
             st.markdown("---")
             
-            # SOLUCIÓN PUNTO 3: Clasificación y priorización por fecha comprometida
             tareas_hoy = []
             tareas_resto = []
             
@@ -261,7 +285,6 @@ def vista_diario():
             cambios_realizados = False
             
             with st.form(key="form_cumplimiento_estructurado"):
-                # Segmento Superior Priorizado
                 if tareas_hoy:
                     st.subheader("🔥 Prioridad para Hoy (Compromisos del Día)")
                     for t in tareas_hoy:
@@ -273,7 +296,9 @@ def vista_diario():
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}*")
+                            est_p = t.get('estado_proyectado', 'N/D')
+                            sub_p = t.get('subestado_proyectado', 'N/D')
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Estado Proyectado: {est_p} ({sub_p})*")
                         else:
                             st.markdown(f"**{icono} {t['categoria'].upper()}**")
                         st.markdown(f"**Entregable Comprometido:** {t['accion']}")
@@ -288,7 +313,6 @@ def vista_diario():
                 else:
                     st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy. Abajo se despliega tu planificación semanal.")
 
-                # Segmento Inferior Secundario
                 if tareas_resto:
                     st.subheader("📅 Resto de la Planificación Semanal")
                     for t in tareas_resto:
@@ -300,7 +324,8 @@ def vista_diario():
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}*")
+                            est_p = t.get('estado_proyectado', 'N/D')
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Estado Proyectado: {est_p}*")
                         else:
                             st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*")
                         st.markdown(f"**Entregable Comprometido:** {t['accion']}")
@@ -338,7 +363,7 @@ def vista_diario():
 # ---------------------------------------------------------
 def vista_reportes():
     st.title("📊 Carta Gantt de Planificación Semanal")
-    st.markdown("Visión gerencial estructurada por Casos (Tareas) y Entregables (Subtareas) en la línea de tiempo.")
+    st.markdown("Visión gerencial estructurada por Casos, Estados Proyectados y Entregables en la línea de tiempo.")
     
     archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json')]
     
@@ -367,14 +392,22 @@ def vista_reportes():
         
         if not df_operativa.empty:
             df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso']).dt.date
+            
+            # Asegurar la presencia de las nuevas columnas de estado proyectado en datos históricos
+            if 'estado_proyectado' not in df_operativa.columns:
+                df_operativa['estado_proyectado'] = 'N/D'
+            if 'subestado_proyectado' not in df_operativa.columns:
+                df_operativa['subestado_proyectado'] = 'N/D'
+
+            # Construcción de la Carta Gantt incluyendo Estado y Sub-estado Proyectado en las filas de control
             df_gantt = df_operativa.pivot_table(
-                index=['Ajustador', 'numero_caso', 'asegurado'], 
+                index=['Ajustador', 'numero_caso', 'asegurado', 'estado_proyectado', 'subestado_proyectado'], 
                 columns='fecha_compromiso', 
                 values='accion', 
                 aggfunc=lambda x: ' | '.join(x)
             ).fillna('')
             
-            st.subheader("🛠️ Gantt Operativo (Casos y Documentos)")
+            st.subheader("🛠️ Gantt Operativo (Casos, Objetivos y Documentos)")
             st.dataframe(df_gantt, use_container_width=True)
         else:
             st.info("No hay tareas operativas (casos) planificadas aún.")
@@ -395,7 +428,6 @@ def vista_reportes():
         st.markdown("### Opciones de Exportación")
         col1, col2 = st.columns(2)
         
-        # SOLUCIÓN PUNTO 2: Aplicación de encode('utf-8-sig') para legibilidad total en Excel
         with col1:
             if not df_operativa.empty:
                 csv_gantt = df_gantt.to_csv().encode('utf-8-sig')
