@@ -93,7 +93,6 @@ def vista_planificador():
     st.title("🗓️ Planificador Semanal")
     st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
     
-    # Jerarquía extraída de los parámetros operativos
     CATALOGO_ACCIONES = {
         "Inspección": ["Presencial", "Remota", "Otro / Manual"],
         "Correos": ["Solicitud de Antecedentes", "Reiteracion 1", "Reiteracion 2", "Reiteracion 3", "Ultimatum", "Cierre por falta de interés", "Otro / Manual"],
@@ -128,7 +127,7 @@ def vista_planificador():
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas")
-                st.info("💡 Seleccione la categoría y el detalle de la acción. Puede registrar hasta 3 acciones por caso.")
+                st.info("💡 Seleccione la categoría, el detalle y la FECHA COMPROMETIDA. Puede registrar hasta 3 acciones por caso.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -146,11 +145,10 @@ def vista_planificador():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Permitir hasta 3 acciones jerárquicas por caso
                         for i in range(1, 4):
-                            colA, colB = st.columns(2)
+                            colA, colB, colC = st.columns([2, 2, 1])
                             with colA:
-                                cat_accion = st.selectbox(f"Categoría Acción {i} (Caso {caso_num}):", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
+                                cat_accion = st.selectbox(f"Categoría Acción {i}:", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
                             with colB:
                                 accion_final = ""
                                 if cat_accion:
@@ -164,6 +162,8 @@ def vista_planificador():
                                                 accion_final = f"{cat_accion} - {texto_manual}"
                                         elif sub_accion:
                                             accion_final = f"{cat_accion} - {sub_accion}"
+                            with colC:
+                                fecha_compromiso = st.date_input(f"Fecha compromiso {i}:", key=f"fecha_{idx}_{i}")
                             
                             if accion_final.strip():
                                 plan_transaccional.append({
@@ -173,6 +173,7 @@ def vista_planificador():
                                     "asegurado": str(asegurado),
                                     "tramo_uf": tramo,
                                     "accion": accion_final,
+                                    "fecha_compromiso": fecha_compromiso.strftime("%Y-%m-%d"),
                                     "estado_cumplimiento": "Pendiente",
                                     "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 })
@@ -184,21 +185,23 @@ def vista_planificador():
             with col1:
                 st.markdown('<div class="marco-gestion"><h4>🤝 Gestión Comercial</h4></div>', unsafe_allow_html=True)
                 comercial_raw = st.text_area("Reuniones, visitas a corredoras, etc. (Una por línea):", key="txt_comercial", height=150)
+                fecha_comercial = st.date_input("Fecha para Comercial:", key="fecha_com")
             
             with col2:
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
                 admin_raw = st.text_area("Capacitaciones, comités, trámites, etc. (Una por línea):", key="txt_admin", height=150)
+                fecha_admin = st.date_input("Fecha para Administrativa:", key="fecha_adm")
             
             if comercial_raw.strip():
                 for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
             if admin_raw.strip():
                 for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
 
             st.markdown("---")
@@ -295,25 +298,71 @@ def vista_diario():
             st.caption(f"Avance de la semana: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
+# BLOQUE 4: VISTA - REPORTE DE JEFATURA
+# ---------------------------------------------------------
+def vista_reportes():
+    st.title("📊 Reporte Consolidado de Planificación")
+    st.markdown("Visión gerencial de los compromisos adquiridos por el equipo de ajustadores.")
+    
+    archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json')]
+    
+    if not archivos_json:
+        st.warning("No hay planes registrados en el servidor en este momento.")
+        return
+        
+    datos_consolidados = []
+    for archivo in archivos_json:
+        partes_nombre = archivo.replace('plan_', '').replace('.json', '').split('_20')
+        nombre_ajustador = partes_nombre[0].replace('_', ' ')
+        
+        filepath = os.path.join(PERSISTENCE_DIR, archivo)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                plan = json.load(f)
+                for tarea in plan:
+                    tarea['Ajustador'] = nombre_ajustador
+                    datos_consolidados.append(tarea)
+        except Exception:
+            pass
+
+    if datos_consolidados:
+        df_reporte = pd.DataFrame(datos_consolidados)
+        
+        # Ordenar y limpiar columnas para el reporte
+        columnas_deseadas = ['Ajustador', 'numero_caso', 'asegurado', 'tramo_uf', 'categoria', 'accion', 'fecha_compromiso', 'estado_cumplimiento', 'fecha_ejecucion']
+        columnas_finales = [col for col in columnas_deseadas if col in df_reporte.columns]
+        df_reporte = df_reporte[columnas_finales]
+        
+        st.dataframe(df_reporte, use_container_width=True)
+        
+        csv = df_reporte.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 DESCARGAR REPORTE CONSOLIDADO (CSV)",
+            data=csv,
+            file_name=f"Reporte_Planificacion_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
+
+# ---------------------------------------------------------
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
 # ---------------------------------------------------------
 def main():
-    st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60) # Icono genérico de ingeniería
+    st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60)
     st.sidebar.title("Navegación OpsControl")
     
-    # Selector de pantalla
     opcion = st.sidebar.radio(
         "Ir a:",
-        ["Planificador Semanal", "Programa Diario"]
+        ["Planificador Semanal", "Programa Diario", "Reportes Jefatura"]
     )
     
     st.sidebar.markdown("---")
     
-    # Enrutamiento según la opción seleccionada
     if opcion == "Planificador Semanal":
         vista_planificador()
     elif opcion == "Programa Diario":
         vista_diario()
+    elif opcion == "Reportes Jefatura":
+        vista_reportes()
 
 if __name__ == "__main__":
     main()
