@@ -45,10 +45,11 @@ def load_master_base():
     uploaded_file = st.sidebar.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
     if uploaded_file is not None:
         try:
+            # Se aplica skiprows=5 para saltar el membrete corporativo y leer encabezados reales
             if uploaded_file.name.endswith('.xlsx'):
-                return pd.read_excel(uploaded_file)
+                return pd.read_excel(uploaded_file, skiprows=5)
             else:
-                return pd.read_csv(uploaded_file)
+                return pd.read_csv(uploaded_file, skiprows=5)
         except Exception as e:
             st.sidebar.error(f"Error técnico: {e}")
     return None
@@ -85,7 +86,6 @@ def load_plan_semanal(ajustador):
 def save_plan_actualizado(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR SEMANAL (LUNES)
 # ---------------------------------------------------------
