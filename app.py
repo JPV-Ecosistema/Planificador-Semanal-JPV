@@ -93,6 +93,15 @@ def vista_planificador():
     st.title("🗓️ Planificador Semanal")
     st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
     
+    # Jerarquía extraída de los parámetros operativos
+    CATALOGO_ACCIONES = {
+        "Inspección": ["Presencial", "Remota", "Otro / Manual"],
+        "Correos": ["Solicitud de Antecedentes", "Reiteracion 1", "Reiteracion 2", "Reiteracion 3", "Ultimatum", "Cierre por falta de interés", "Otro / Manual"],
+        "Reunión": ["Presencial", "Presentación pptx", "On line", "Presentacion on line", "Otro / Manual"],
+        "Preparar Informe": ["Preliminar Extendido", "Preliminar Corto", "Carta de Análisis de Pérdidas", "Carta de Cobertura (Rechazo)", "Informe Intermedio 1", "Informe Intermedio 2", "Informe Intermedio 3", "Informe Intermedio 4", "Informe Intermedio 5", "Informe Intermedio", "Informe Final de Liquidación", "Respuesta a Impugnación", "Ademdum", "Otro / Manual"],
+        "Otra Acción (Manual)": ["Describir manualmente"]
+    }
+    
     df_maestro = load_master_base()
     
     if df_maestro is not None:
@@ -119,7 +128,7 @@ def vista_planificador():
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas")
-                st.info("💡 Escriba las acciones a realizar. Si hay múltiples acciones para un mismo caso, escríbalas en líneas separadas (Enter).")
+                st.info("💡 Seleccione la categoría y el detalle de la acción. Puede registrar hasta 3 acciones por caso.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -137,22 +146,37 @@ def vista_planificador():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        acciones_raw = st.text_area(f"Acciones para el caso {caso_num}:", key=f"txt_{idx}", height=100)
-                        
-                        if acciones_raw.strip():
-                            lineas_acciones = [linea.strip() for linea in acciones_raw.split('\n') if linea.strip()]
-                            for accion in lineas_acciones:
+                        # Permitir hasta 3 acciones jerárquicas por caso
+                        for i in range(1, 4):
+                            colA, colB = st.columns(2)
+                            with colA:
+                                cat_accion = st.selectbox(f"Categoría Acción {i} (Caso {caso_num}):", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
+                            with colB:
+                                accion_final = ""
+                                if cat_accion:
+                                    if cat_accion == "Otra Acción (Manual)":
+                                        accion_final = st.text_input(f"Describa la acción {i}:", key=f"man_{idx}_{i}")
+                                    else:
+                                        sub_accion = st.selectbox(f"Detalle Acción {i}:", [""] + CATALOGO_ACCIONES[cat_accion], key=f"sub_{idx}_{i}")
+                                        if sub_accion == "Otro / Manual":
+                                            texto_manual = st.text_input(f"Especifique el detalle {i}:", key=f"man_{idx}_{i}")
+                                            if texto_manual:
+                                                accion_final = f"{cat_accion} - {texto_manual}"
+                                        elif sub_accion:
+                                            accion_final = f"{cat_accion} - {sub_accion}"
+                            
+                            if accion_final.strip():
                                 plan_transaccional.append({
                                     "id_transaccion": str(uuid.uuid4()),
                                     "categoria": "Operativa",
                                     "numero_caso": str(caso_num),
                                     "asegurado": str(asegurado),
                                     "tramo_uf": tramo,
-                                    "accion": accion,
+                                    "accion": accion_final,
                                     "estado_cumplimiento": "Pendiente",
                                     "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 })
-
+                                
             st.markdown("---")
             st.header("3. Acciones de Gestión")
             col1, col2 = st.columns(2)
@@ -191,7 +215,7 @@ def vista_planificador():
                     except Exception as e:
                         st.error(f"Error: {e}")
             elif selected_indices:
-                st.warning("Debe escribir al menos una acción para guardar el plan.")
+                st.warning("Debe seleccionar al menos una acción válida para guardar el plan.")
     else:
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
