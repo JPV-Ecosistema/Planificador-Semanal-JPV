@@ -359,9 +359,17 @@ def vista_diario():
             st.caption(f"Avance de la semana: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
-# BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT)
+# BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT EXCEL/WORD)
 # ---------------------------------------------------------
 def vista_reportes():
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from docx import Document
+    from docx.shared import RGBColor
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
+    
     st.title("📊 Carta Gantt de Planificación Semanal")
     st.markdown("Visión gerencial estructurada por Casos, Estados Proyectados y Entregables en la línea de tiempo.")
     
@@ -393,59 +401,130 @@ def vista_reportes():
         if not df_operativa.empty:
             df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso']).dt.date
             
-            # Asegurar la presencia de las nuevas columnas de estado proyectado en datos históricos
             if 'estado_proyectado' not in df_operativa.columns:
                 df_operativa['estado_proyectado'] = 'N/D'
             if 'subestado_proyectado' not in df_operativa.columns:
                 df_operativa['subestado_proyectado'] = 'N/D'
 
-            # Construcción de la Carta Gantt incluyendo Estado y Sub-estado Proyectado en las filas de control
-            df_gantt = df_operativa.pivot_table(
+            df_gantt_visual = df_operativa.pivot_table(
                 index=['Ajustador', 'numero_caso', 'asegurado', 'estado_proyectado', 'subestado_proyectado'], 
                 columns='fecha_compromiso', 
                 values='accion', 
                 aggfunc=lambda x: ' | '.join(x)
             ).fillna('')
             
-            st.subheader("🛠️ Gantt Operativo (Casos, Objetivos y Documentos)")
-            st.dataframe(df_gantt, use_container_width=True)
-        else:
-            st.info("No hay tareas operativas (casos) planificadas aún.")
+            st.subheader("🛠️ Gantt Operativo (Vista Previa)")
+            st.dataframe(df_gantt_visual, use_container_width=True)
 
-        df_gestion = df_raw[df_raw['categoria'] != 'Operativa'].copy()
-        if not df_gestion.empty:
-            st.subheader("🤝 Gantt de Gestión (Comercial / Administrativa)")
-            df_gestion['fecha_compromiso'] = pd.to_datetime(df_gestion['fecha_compromiso']).dt.date
-            df_gantt_gest = df_gestion.pivot_table(
-                index=['Ajustador', 'categoria'], 
-                columns='fecha_compromiso', 
-                values='accion', 
-                aggfunc=lambda x: ' | '.join(x)
-            ).fillna('')
-            st.dataframe(df_gantt_gest, use_container_width=True)
+            # --- GENERADOR DE EXCEL NATIVO CORPORATIVO ---
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Plan Semanal Gantt"
+            
+            fechas_unicas = sorted(df_operativa['fecha_compromiso'].unique())
+            headers_excel = ["Ajustador", "Caso", "Asegurado", "Acción y Entregable"] + [f.strftime('%A %d-%m') for f in fechas_unicas]
+            ws.append(headers_excel)
+            
+            grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'asegurado', 'accion'])
+            for name, group in grouped:
+                ajustador, caso, asegurado, accion = name
+                row = [ajustador, caso, asegurado, accion]
+                for f in fechas_unicas:
+                    if f in group['fecha_compromiso'].values:
+                        row.append("X")
+                    else:
+                        row.append("")
+                ws.append(row)
+                
+            header_fill = PatternFill(start_color="003366", end_color="003366", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True)
+            thin_border = Border(left=Side(style='thin', color='D3D3D3'), right=Side(style='thin', color='D3D3D3'), 
+                                 top=Side(style='thin', color='D3D3D3'), bottom=Side(style='thin', color='D3D3D3'))
+            center_alignment = Alignment(horizontal="center", vertical="center")
+            
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_alignment
+                cell.border = thin_border
+                
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                for cell in row:
+                    cell.border = thin_border
+                    if cell.column > 4:
+                        cell.alignment = center_alignment
+                        if cell.value == "X":
+                            cell.fill = PatternFill(start_color="217346", end_color="217346", fill_type="solid")
+                            cell.font = Font(color="FFFFFF", bold=True)
+            
+            for i, width in enumerate([25, 12, 35, 30] + [15]*len(fechas_unicas), 1):
+                ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
+                
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            
+            # --- GENERADOR DE WORD NATIVO CORPORATIVO ---
+            doc = Document()
+            doc.add_heading('Reporte Consolidado de Planificación Semanal - Gantt', 0)
+            doc.add_paragraph('Visión gerencial estructurada por Casos, Tareas y Entregables en la línea de tiempo.')
+            
+            headers_word = ["Ajustador", "Caso", "Asegurado", "Acción/Entregable"] + [f.strftime('%d-%m') for f in fechas_unicas]
+            table = doc.add_table(rows=1, cols=len(headers_word))
+            table.style = 'Table Grid'
+            hdr_cells = table.rows[0].cells
+            
+            for i, title in enumerate(headers_word):
+                hdr_cells[i].text = title
+                hdr_cells[i].paragraphs[0].runs[0].font.bold = True
+                shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                hdr_cells[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
+                
+            for name, group in grouped:
+                ajustador, caso, asegurado, accion = name
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(ajustador)
+                row_cells[1].text = str(caso)
+                row_cells[2].text = str(asegurado)
+                row_cells[3].text = str(accion)
+                for i, f in enumerate(fechas_unicas):
+                    col_idx = 4 + i
+                    if f in group['fecha_compromiso'].values:
+                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                        row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
 
-        st.markdown("---")
-        st.markdown("### Opciones de Exportación")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if not df_operativa.empty:
-                csv_gantt = df_gantt.to_csv().encode('utf-8-sig')
+            word_buffer = io.BytesIO()
+            doc.save(word_buffer)
+
+            # --- BOTONES DE DESCARGA ---
+            st.markdown("---")
+            st.markdown("### Opciones de Exportación Corporativa")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
                 st.download_button(
-                    label="📥 DESCARGAR GANTT CASOS (Para Excel)",
-                    data=csv_gantt,
-                    file_name=f"Gantt_Casos_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
+                    label="📥 DESCARGAR GANTT (EXCEL)",
+                    data=excel_buffer.getvalue(),
+                    file_name=f"Gantt_Planificacion_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            with col2:
+                st.download_button(
+                    label="📥 DESCARGAR REPORTE (WORD)",
+                    data=word_buffer.getvalue(),
+                    file_name=f"Reporte_Planificacion_{datetime.now().strftime('%Y%m%d')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            with col3:
+                csv_raw = df_raw.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 DESCARGAR DATA BRUTA (CSV)",
+                    data=csv_raw,
+                    file_name=f"Data_Bruta_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                 )
-        with col2:
-            csv_raw = df_raw.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 DESCARGAR DATA BASE BRUTA (Histórico)",
-                data=csv_raw,
-                file_name=f"Data_Bruta_OpsControl_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-            )
-
+        else:
+            st.info("No hay tareas operativas (casos) planificadas aún.")
 # ---------------------------------------------------------
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
 # ---------------------------------------------------------
