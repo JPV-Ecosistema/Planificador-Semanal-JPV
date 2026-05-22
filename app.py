@@ -13,8 +13,8 @@ st.set_page_config(page_title="JPV - OpsControl", layout="wide")
 PERSISTENCE_DIR = "persistence"
 
 def init_system():
-    if not os.path.exists(PERSISTENCE_DIR):
-        os.makedirs(PERSISTENCE_DIR)
+    # El parámetro exist_ok=True evita el choque en servidores web si la carpeta ya existe
+    os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
 def get_week_identifier():
     return datetime.now().strftime("%Y_W%W")
