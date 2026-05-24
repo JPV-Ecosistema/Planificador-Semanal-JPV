@@ -30,7 +30,7 @@ def apply_custom_styles():
         .marco-gestion { background-color: white; padding: 15px; border-radius: 5px; border-left: 5px solid #004a99; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .tarea-marco { background-color: white; padding: 15px; border-radius: 5px; border-left: 5px solid #004a99; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .tarea-realizada { border-left: 5px solid #217346; opacity: 0.8; }
-        h1, h2, h3, h4 { color: #003366; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        h1, h2, h3, h4 { color: #003366 !important; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -94,6 +94,7 @@ def vista_planificador():
     st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
     
     CATALOGO_ACCIONES = {
+        "En Ajuste": ["Revisión de cobertura", "Revisión de antecedentes", "Otro / Manual"],
         "Inspección": ["Presencial", "Remota", "Otro / Manual"],
         "Correos": ["Solicitud de Antecedentes", "Reiteracion 1", "Reiteracion 2", "Reiteracion 3", "Ultimatum", "Cierre por falta de interés", "Otro / Manual"],
         "Reunión": ["Presencial", "Presentación pptx", "On line", "Presentacion on line", "Otro / Manual"],
@@ -112,7 +113,6 @@ def vista_planificador():
         if ajustador_seleccionado:
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
-            # Extracción dinámica de Estados y Sub-estados únicos del Excel para las listas desplegables
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
@@ -120,10 +120,18 @@ def vista_planificador():
             st.header("1. Selección de Casos Operativos")
             st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles en la Base Maestra.")
             
+            # Función anidada para armar el texto con Nickname en el selector
+            def formato_caso_nickname(x):
+                fila = casos_vigentes.loc[x]
+                base_str = f"Caso {fila['Número de caso']} - {fila['Asegurado']}"
+                if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "":
+                    return f"{base_str} - [{fila['Nickname']}]"
+                return base_str
+
             selected_indices = st.multiselect(
                 "Seleccione los casos que intervendrá esta semana:",
                 options=casos_vigentes.index.tolist(),
-                format_func=lambda x: f"Caso {casos_vigentes.loc[x, 'Número de caso']} - {casos_vigentes.loc[x, 'Asegurado']}"
+                format_func=formato_caso_nickname
             )
             
             plan_transaccional = []
@@ -141,17 +149,21 @@ def vista_planificador():
                     subestado_actual = str(fila['Sub estado']) if 'Sub estado' in fila and pd.notna(fila['Sub estado']) else "N/D"
                     tramo = calcular_tramo_uf(fila)
                     
+                    # Extracción del Nickname para la tarjeta visual
+                    nickname = ""
+                    if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "":
+                        nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>"
+                    
                     with st.container():
                         st.markdown(f"""
                         <div class="marco-caso">
-                            <h4>[{caso_num}] {asegurado}</h4>
+                            <h4>[{caso_num}] {asegurado}{nickname}</h4>
                             <p style="color:gray; font-size: 0.9em; margin-bottom: 5px;">
                                 <b>Clasificación:</b> {tramo} | <b>Estado en Excel:</b> {estado_actual} | <b>Sub-estado en Excel:</b> {subestado_actual}
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Selectores para mantener o cambiar el Estado y Sub-estado durante la semana
                         col_est, col_sub = st.columns(2)
                         with col_est:
                             opts_est = estados_maestros.copy()
