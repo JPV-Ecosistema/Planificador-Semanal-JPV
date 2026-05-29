@@ -53,7 +53,7 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
-# VERSIÓN: 2.1 (Persistencia Base Maestra y Motor Nube)
+# VERSIÓN: 2.1.1 (Fix Timestamps Base Maestra)
 # ---------------------------------------------------------
 def get_google_client():
     try:
@@ -135,8 +135,8 @@ def load_master_base():
                 else:
                     df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
                 
-                # Blindaje de datos: Reemplazar nulos para que Google y JSON no fallen
-                df_nuevo = df_nuevo.fillna("") 
+                # Blindaje de datos estricto: Convertir todo a texto para evitar caída de JSON por fechas
+                df_nuevo = df_nuevo.astype(str).replace(["nan", "NaT", "<NA>", "None"], "")
                 fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Guardado Caché Local
@@ -157,7 +157,7 @@ def load_master_base():
                     matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
                     matriz.append(df_nuevo.columns.astype(str).tolist())
                     matriz.extend(df_nuevo.values.tolist())
-                    ws.update("A1", matriz)
+                    ws.update(matriz, "A1")
 
                 st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
                 st.rerun()
@@ -167,7 +167,7 @@ def load_master_base():
     return df_local
 
 def limpiar_monto_mcl(valor):
-    if pd.isna(valor) or str(valor).strip() == "": return 0.0
+    if pd.isna(valor) or str(valor).strip() in ["", "nan", "NaT"]: return 0.0
     if isinstance(valor, (int, float)): return float(valor)
     
     v_str = str(valor).strip().replace('$', '').replace(' ', '')
