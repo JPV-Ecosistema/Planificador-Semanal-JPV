@@ -53,7 +53,7 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
-# VERSIÓN: 2.1.3 (Fix 429 Quota & Protocolo Resiliencia)
+# VERSIÓN: 2.1.4 (Guardián de Sesión contra Bucles 429)
 # ---------------------------------------------------------
 def get_google_client():
     try:
@@ -81,7 +81,7 @@ def load_master_base():
     df_local = None
     fecha_actualizacion = None
     
-    # 1. Recuperación en silencio desde Google Sheets (Pestaña Dedicada) si no hay base local
+    # 1. Recuperación en silencio desde Google Sheets si no hay base local
     if not os.path.exists(filepath):
         client = get_google_client()
         if client:
@@ -92,11 +92,9 @@ def load_master_base():
                 
                 if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
                     fecha_str = metadata[1]
-                    # Extraer datos reales saltando la primera fila de metadata
                     datos_crud = ws.get_all_records(head=2) 
                     df_local = pd.DataFrame(datos_crud)
                     
-                    # Crear copia de caché local ultra-rápida
                     datos_guardar = {"fecha": fecha_str, "data": df_local.to_dict(orient="records")}
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(datos_guardar, f, ensure_ascii=False)
@@ -125,63 +123,63 @@ def load_master_base():
     else:
         st.sidebar.warning("⚠️ No hay base de datos en el sistema.")
 
-    # 4. Motor de Carga y Respaldo Nube
+    # 4. Motor de Carga, Sanitización y Respaldo Nube
     with st.sidebar.expander("📥 Subir / Actualizar Base Maestra", expanded=necesita_actualizacion):
         uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
         if uploaded_file is not None:
-            try:
-                if uploaded_file.name.endswith('.xlsx'):
-                    df_nuevo = pd.read_excel(uploaded_file, skiprows=5)
-                else:
-                    df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
-                
-                # ---------------------------------------------------------
-                # BLINDAJE EXTREMO CONTRA NaN Y DATOS TÓXICOS
-                # ---------------------------------------------------------
-                df_nuevo = df_nuevo.fillna("") 
-                for col in df_nuevo.columns:
-                    df_nuevo[col] = df_nuevo[col].astype(str)
-                    df_nuevo[col] = df_nuevo[col].apply(
-                        lambda x: "" if str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
-                    )
-                # ---------------------------------------------------------
-
-                fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # Guardado Caché Local INMEDIATO (Garantiza el funcionamiento de la app)
-                datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(datos_guardar, f, ensure_ascii=False)
-                    
-                # Protocolo de Resiliencia Nube
+            # Creamos una huella digital única para el archivo subido
+            file_signature = f"{uploaded_file.name}_{uploaded_file.size}"
+            
+            # El Guardián solo permite procesar si es un archivo nuevo o no ha sido registrado en esta sesión
+            if st.session_state.get("ultima_base_procesada") != file_signature:
                 try:
-                    client = get_google_client()
-                    if client:
-                        doc = client.open_by_url(st.secrets["google_sheet_url"])
-                        try:
-                            ws = doc.worksheet("Base_Maestra")
-                        except:
-                            ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
-                        
-                        ws.clear()
-                        matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
-                        matriz.append(df_nuevo.columns.astype(str).tolist())
-                        matriz.extend(df_nuevo.values.tolist())
-                        
-                        # Orden correcto de parámetros para un solo request limpio
-                        ws.update("A1", matriz)
-
-                    st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
-                except Exception as cloud_error:
-                    if "429" in str(cloud_error):
-                        st.warning("⚠️ Base guardada localmente con éxito. Google Cloud está en pausa (Límite 429 de peticiones). Puedes operar tu planificador normalmente.")
+                    if uploaded_file.name.endswith('.xlsx'):
+                        df_nuevo = pd.read_excel(uploaded_file, skiprows=5)
                     else:
-                        st.warning(f"⚠️ Base guardada localmente. Hubo un detalle con el respaldo en nube: {cloud_error}")
-                
-                # Esto garantiza que el usuario siempre avance sin quedar atrapado
-                st.rerun() 
-            except Exception as e:
-                st.sidebar.error(f"Error crítico al procesar el Excel: {e}")
+                        df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
+                    
+                    df_nuevo = df_nuevo.fillna("") 
+                    for col in df_nuevo.columns:
+                        df_nuevo[col] = df_nuevo[col].astype(str)
+                        df_nuevo[col] = df_nuevo[col].apply(
+                            lambda x: "" if str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
+                        )
+
+                    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Guardado Local Inmediato (Asegura operatividad interna)
+                    datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(datos_guardar, f, ensure_ascii=False)
+                        
+                    # Intento de Sincronización en la Nube corporativa
+                    try:
+                        client = get_google_client()
+                        if client:
+                            doc = client.open_by_url(st.secrets["google_sheet_url"])
+                            try:
+                                ws = doc.worksheet("Base_Maestra")
+                            except:
+                                ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
+                            
+                            ws.clear()
+                            matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
+                            matriz.append(df_nuevo.columns.astype(str).tolist())
+                            matriz.extend(df_nuevo.values.tolist())
+                            ws.update("A1", matriz)
+
+                        st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
+                    except Exception as cloud_error:
+                        if "429" in str(cloud_error):
+                            st.warning("⚠️ Base guardada localmente con éxito. Google Cloud está en pausa (Límite 429 de peticiones). Puedes operar tu planificador normalmente.")
+                        else:
+                            st.warning(f"⚠️ Base guardada localmente. Hubo un detalle con el respaldo en nube: {cloud_error}")
+                    
+                    # Registramos el archivo como procesado para congelar ejecuciones repetidas
+                    st.session_state["ultima_base_procesada"] = file_signature
+                    st.rerun() 
+                except Exception as e:
+                    st.sidebar.error(f"Error crítico al procesar el Excel: {e}")
                 
     return df_local
 
@@ -250,7 +248,8 @@ def sync_from_cloud(filename, filepath):
                         json.dump(datos_json, f, ensure_ascii=False, indent=4)
                     return datos_json
         except Exception as e:
-            st.error(f"⚠️ Error al descargar respaldo desde la nube: {e}")
+            # Evitamos alertas invasivas si la cuota de lectura también está retenida temporalmente
+            pass
     return []
 
 def load_plan_semanal(ajustador, offset_weeks=0):
