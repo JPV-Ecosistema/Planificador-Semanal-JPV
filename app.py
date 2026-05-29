@@ -13,7 +13,7 @@ import pandas as pd
 import os
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -24,8 +24,9 @@ PERSISTENCE_DIR = "persistence"
 def init_system():
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
-def get_week_identifier():
-    return datetime.now().strftime("%Y_W%W")
+def get_week_identifier(offset_weeks=0):
+    target_date = datetime.now() + timedelta(weeks=offset_weeks)
+    return target_date.strftime("%Y_W%W")
 
 def apply_custom_styles():
     st.markdown("""
@@ -65,16 +66,13 @@ def limpiar_monto_mcl(valor):
     if pd.isna(valor) or str(valor).strip() == "": return 0.0
     if isinstance(valor, (int, float)): return float(valor)
     
-    # Limpieza agresiva de textos financieros
     v_str = str(valor).strip().replace('$', '').replace(' ', '')
-    
-    # Manejo robusto de formato chileno vs formato americano
     if '.' in v_str and ',' in v_str:
-        if v_str.rfind(',') > v_str.rfind('.'): # Ej: 1.500.000,50
+        if v_str.rfind(',') > v_str.rfind('.'):
             v_str = v_str.replace('.', '').replace(',', '.')
-        else: # Ej: 1,500,000.50
+        else:
             v_str = v_str.replace(',', '')
-    elif ',' in v_str: # Ej: 1500,50
+    elif ',' in v_str:
         v_str = v_str.replace(',', '.')
         
     try:
@@ -85,8 +83,6 @@ def limpiar_monto_mcl(valor):
 def calcular_tramo_mcl(fila):
     valor = 0.0
     divisa = str(fila.get('Divisa', '')).upper()
-    
-    # Lectura estricta y exclusiva de la columna BI ('Perdida bruta (en moneda del caso)')
     col_perdida = 'Perdida bruta (en moneda del caso)'
     
     if col_perdida in fila and pd.notna(fila[col_perdida]):
@@ -95,7 +91,6 @@ def calcular_tramo_mcl(fila):
     is_mcl = False
     tramo_str = "<= 1000 UF"
     
-    # Filtro lógico para Major and Complex Losses
     if 'USD' in divisa or 'US$' in divisa or 'DÓLAR' in divisa or 'DOLAR' in divisa:
         if valor > 200000:
             is_mcl = True
@@ -122,14 +117,22 @@ def get_google_sheet():
         pass
     return None
 
-def load_plan_semanal(ajustador):
-    week_id = get_week_identifier()
+def load_plan_semanal(ajustador, offset_weeks=0):
+    week_id = get_week_identifier(offset_weeks)
     filename = f"plan_{ajustador.replace(' ', '_')}_{week_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
     return [], filepath 
+
+def load_plan_mensual(ajustador):
+    filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}.json"
+    filepath = os.path.join(PERSISTENCE_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f), filepath
+    return [], filepath
 
 def save_plan_actualizado(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
@@ -140,18 +143,27 @@ def save_plan_actualizado(filepath, data):
         try:
             pass # Sincronización Google en Fase 2
         except: pass
-
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
-    if modo == "Semanal":
-        st.title("🗓️ Planificador Semanal")
-        st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
-    else:
-        st.title("🏆 Planificador Mensual MCL")
-        st.markdown("Gestión estratégica de casos complejos (Major and Complex Losses > 5000 UF / > 200k USD).")
-    
+    col_t1, col_t2 = st.columns([2, 1])
+    with col_t1:
+        if modo == "Semanal":
+            st.title("🗓️ Planificador Semanal")
+            st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar.")
+        else:
+            st.title("🏆 Planificador Mensual MCL")
+            st.markdown("Gestión estratégica de casos complejos (Major and Complex Losses > 5000 UF / > 200k USD).")
+            
+    with col_t2:
+        if modo == "Semanal":
+            st.markdown("<br>", unsafe_allow_html=True)
+            semana_opcion = st.radio("¿Qué semana estás planificando?", ["Semana Actual", "Próxima Semana"], horizontal=True)
+            offset_weeks = 0 if semana_opcion == "Semana Actual" else 1
+        else:
+            offset_weeks = 0
+            
     CATALOGO_ACCIONES = {
         "En Ajuste": ["Revisión de cobertura", "Revisión de antecedentes", "Otro / Manual"],
         "Inspección": ["Presencial", "Remota", "Otro / Manual"],
@@ -181,8 +193,43 @@ def vista_planificador(modo="Semanal"):
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
+            plan_transaccional = []
+            
+            # --- LÓGICA DE HERENCIA MCL EN CASCADA ---
+            if modo == "Semanal":
+                mcl_data, mcl_path = load_plan_mensual(ajustador_seleccionado)
+                target_week_id = get_week_identifier(offset_weeks)
+                
+                mcl_pendientes = []
+                for t in mcl_data:
+                    try:
+                        fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d")
+                        if fec_obj.strftime("%Y_W%W") == target_week_id and not t.get("agendado_semana"):
+                            mcl_pendientes.append(t)
+                    except: pass
+                
+                if mcl_pendientes:
+                    st.markdown("---")
+                    st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar día)</h4></div>', unsafe_allow_html=True)
+                    st.info("Estos compromisos fueron proyectados en tu Planificador Mensual para ejecutarse en esta semana. Asígnales un día específico para incorporarlos a tu agenda.")
+                    
+                    for idx, mcl_task in enumerate(mcl_pendientes):
+                        c1, c2 = st.columns([3, 1])
+                        with c1:
+                            st.write(f"**Caso:** [{mcl_task['numero_caso']}] {mcl_task['asegurado']}")
+                            st.write(f"**Entregable Estratégico:** {mcl_task['accion']}")
+                        with c2:
+                            fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
+                            nueva_fecha_mcl = st.date_input(f"Día de ejecución:", value=fec_obj, key=f"mcl_fec_{idx}")
+                            
+                        # Transformamos el hito en tarea semanal
+                        task_to_add = mcl_task.copy()
+                        task_to_add['fecha_compromiso'] = nueva_fecha_mcl.strftime("%Y-%m-%d")
+                        task_to_add['id_mcl_origen'] = mcl_task['id_transaccion'] 
+                        plan_transaccional.append(task_to_add)
+
             st.markdown("---")
-            st.header("1. Selección de Casos Operativos")
+            st.header("1. Selección de Casos Operativos Regulares")
             st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles bajo este filtro.")
             
             def formato_caso_nickname(x):
@@ -197,8 +244,6 @@ def vista_planificador(modo="Semanal"):
                 options=casos_vigentes.index.tolist(),
                 format_func=formato_caso_nickname
             )
-            
-            plan_transaccional = []
             
             if selected_indices:
                 st.markdown("---")
@@ -329,24 +374,39 @@ def vista_planificador(modo="Semanal"):
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
-                st.info(f"Se han registrado **{len(plan_transaccional)} acciones** en total.")
+                st.info(f"Se han consolidado **{len(plan_transaccional)} acciones** en total para guardar.")
                 if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
                     try:
-                        week_id = get_week_identifier()
-                        filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{week_id}.json"
-                        filepath = os.path.join(PERSISTENCE_DIR, filename)
-                        
-                        plan_existente = []
-                        if os.path.exists(filepath):
-                            with open(filepath, 'r', encoding='utf-8') as f:
-                                plan_existente = json.load(f)
-                        
-                        plan_final = plan_existente + plan_transaccional
-                        
-                        save_plan_actualizado(filepath, plan_final)
-                        st.success(f"Plan {modo} guardado exitosamente.")
+                        if modo == "Mensual":
+                            _, filepath = load_plan_mensual(ajustador_seleccionado)
+                            plan_existente = []
+                            if os.path.exists(filepath):
+                                with open(filepath, 'r', encoding='utf-8') as f:
+                                    plan_existente = json.load(f)
+                            save_plan_actualizado(filepath, plan_existente + plan_transaccional)
+                            st.success("Plan Mensual MCL guardado exitosamente en la bóveda.")
+                        else:
+                            target_week_id = get_week_identifier(offset_weeks)
+                            filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{target_week_id}.json"
+                            filepath = os.path.join(PERSISTENCE_DIR, filename)
+                            
+                            plan_existente = []
+                            if os.path.exists(filepath):
+                                with open(filepath, 'r', encoding='utf-8') as f:
+                                    plan_existente = json.load(f)
+                                    
+                            # Marcador para evitar que la tarea MCL vuelva a pedir fecha la próxima vez que abran el semanal
+                            if 'mcl_data' in locals() and mcl_data:
+                                mcl_ids_agendados = [t['id_mcl_origen'] for t in plan_transaccional if 'id_mcl_origen' in t]
+                                for t in mcl_data:
+                                    if t['id_transaccion'] in mcl_ids_agendados:
+                                        t['agendado_semana'] = True
+                                save_plan_actualizado(mcl_path, mcl_data) 
+                                
+                            save_plan_actualizado(filepath, plan_existente + plan_transaccional)
+                            st.success(f"Plan Semanal guardado exitosamente para la {semana_opcion}.")
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
                 st.warning("Complete el detalle de las acciones o seleccione casos válidos para guardar el plan.")
     else:
