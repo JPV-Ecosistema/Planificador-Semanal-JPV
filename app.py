@@ -123,9 +123,13 @@ def save_plan_actualizado(filepath, data):
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # ---------------------------------------------------------
-def vista_planificador():
-    st.title("🗓️ Planificador Operativo")
-    st.markdown("Seleccione el modelo de planificación y los casos de la Base Maestra.")
+def vista_planificador(modo="Semanal"):
+    if modo == "Semanal":
+        st.title("🗓️ Planificador Semanal")
+        st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
+    else:
+        st.title("🏆 Planificador Mensual MCL")
+        st.markdown("Gestión estratégica de casos complejos (Major and Complex Losses > 5000 UF / > 200k USD).")
     
     CATALOGO_ACCIONES = {
         "En Ajuste": ["Revisión de cobertura", "Revisión de antecedentes", "Otro / Manual"],
@@ -145,23 +149,18 @@ def vista_planificador():
         ajustador_seleccionado = st.selectbox("Identificación de Ajustador:", [""] + ajustadores_validos)
         
         if ajustador_seleccionado:
-            st.markdown("---")
-            tipo_planificacion = st.radio("Seleccione el Tipo de Planificación:", 
-                                         ["Plan Semanal (Regular <= 5000 UF)", "Plan Mensual MCL (> 5000 UF / > 200k USD)"], horizontal=True)
-            
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
-            if "Mensual" in tipo_planificacion:
+            if modo == "Mensual":
                 casos_vigentes = casos_vigentes[casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
-                st.warning("📊 Modo Mensual MCL: Mostrando exclusivamente siniestros complejos mayores a 5000 UF o 200.000 USD.")
-                tipo_plan_str = "Mensual"
+                st.warning("📊 Filtro MCL Activo: Mostrando exclusivamente siniestros complejos.")
             else:
                 casos_vigentes = casos_vigentes[~casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
-                tipo_plan_str = "Semanal"
                 
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
+            st.markdown("---")
             st.header("1. Selección de Casos Operativos")
             st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles bajo este filtro.")
             
@@ -249,7 +248,7 @@ def vista_planificador():
                             if accion_final.strip():
                                 plan_transaccional.append({
                                     "id_transaccion": str(uuid.uuid4()),
-                                    "tipo_plan": tipo_plan_str,
+                                    "tipo_plan": modo,
                                     "tipo_actividad": "Programada",
                                     "categoria": "Operativa",
                                     "numero_caso": str(caso_num),
@@ -280,25 +279,24 @@ def vista_planificador():
             if comercial_raw.strip():
                 for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": tipo_plan_str, "tipo_actividad": "Programada", "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
             if admin_raw.strip():
                 for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": tipo_plan_str, "tipo_actividad": "Programada", "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
                 st.info(f"Se han registrado **{len(plan_transaccional)} acciones**.")
-                if st.button(f"💾 COMPROMETER PLAN {tipo_plan_str.upper()}"):
+                if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
                     try:
                         week_id = get_week_identifier()
                         filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{week_id}.json"
                         filepath = os.path.join(PERSISTENCE_DIR, filename)
                         
-                        # Combinar planes si el ajustador ya tenía uno guardado (para mezclar Semanal y Mensual)
                         plan_existente = []
                         if os.path.exists(filepath):
                             with open(filepath, 'r', encoding='utf-8') as f:
@@ -307,7 +305,7 @@ def vista_planificador():
                         plan_final = plan_existente + plan_transaccional
                         
                         save_plan_actualizado(filepath, plan_final)
-                        st.success(f"Plan {tipo_plan_str} guardado exitosamente.")
+                        st.success(f"Plan {modo} guardado exitosamente.")
                     except Exception as e:
                         st.error(f"Error: {e}")
             elif selected_indices:
