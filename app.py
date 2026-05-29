@@ -595,6 +595,7 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
+# VERSIÓN: 2.2 (Selector Automático y Visor de Honorarios)
 # ---------------------------------------------------------
 def vista_diario():
     st.title("☀️ Ejecución y Cumplimiento")
@@ -644,11 +645,12 @@ def vista_diario():
                         "numero_caso": str(np_caso),
                         "asegurado": str(np_asegurado),
                         "tramo_uf": "N/D",
+                        "honorarios_estimados": 0.0, # Las no programadas no traccionan UF automáticas por ahora
                         "estado_proyectado": "N/D",
                         "subestado_proyectado": "N/D",
                         "accion": np_accion,
                         "fecha_compromiso": np_fecha.strftime("%Y-%m-%d"),
-                        "estado_cumplimiento": "Realizado", # Se marca como realizado automáticamente
+                        "estado_cumplimiento": "Realizado", 
                         "fecha_ejecucion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
@@ -665,20 +667,52 @@ def vista_diario():
             st.success("Plan Operativo sincronizado correctamente.")
             st.markdown("---")
             
+            # --- MOTOR DE CÁLCULO DE HONORARIOS Y TAREAS ---
             tareas_hoy = []
             tareas_resto = []
+            uf_proyectadas_hoy = 0.0
+            uf_ejecutadas_hoy = 0.0
+            uf_proyectadas_semana = 0.0
+            uf_ejecutadas_semana = 0.0
             
             for idx, tarea in enumerate(plan_data):
                 tarea_con_indice = tarea.copy()
                 tarea_con_indice['_posicion_original'] = idx
+                
+                # Rescate seguro del valor UF
+                try:
+                    uf_tarea = float(tarea.get("honorarios_estimados", 0.0))
+                except:
+                    uf_tarea = 0.0
+                    
+                es_realizado = (tarea.get("estado_cumplimiento") == "Realizado")
+                
+                # Sumatorias Totales
+                uf_proyectadas_semana += uf_tarea
+                if es_realizado:
+                    uf_ejecutadas_semana += uf_tarea
+                
+                # Separación por fecha
                 if tarea.get("fecha_compromiso") == hoy_str:
                     tareas_hoy.append(tarea_con_indice)
+                    uf_proyectadas_hoy += uf_tarea
+                    if es_realizado:
+                        uf_ejecutadas_hoy += uf_tarea
                 else:
                     tareas_resto.append(tarea_con_indice)
             
             total_tareas = len(plan_data)
             tareas_completadas = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
             cambios_realizados = False
+            
+            # --- TABLERO VISUAL DE HONORARIOS ---
+            st.subheader("📊 Rendimiento Financiero del Plan")
+            col_met1, col_met2, col_met3, col_met4 = st.columns(4)
+            col_met1.metric("UF Proyectadas Hoy", f"{uf_proyectadas_hoy:,.2f}")
+            col_met2.metric("UF Ejecutadas Hoy", f"{uf_ejecutadas_hoy:,.2f}")
+            col_met3.metric("UF Proyectadas Semana", f"{uf_proyectadas_semana:,.2f}")
+            col_met4.metric("UF Ejecutadas Semana", f"{uf_ejecutadas_semana:,.2f}")
+            st.markdown("---")
             
             with st.form(key="form_cumplimiento_estructurado"):
                 if tareas_hoy:
@@ -690,14 +724,15 @@ def vista_diario():
                         clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
                         icono = "✅" if es_realizado else "⚡"
                         tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
+                        uf_txt = f" | 💰 {float(t.get('honorarios_estimados', 0.0)):,.2f} UF"
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
                             est_p = t.get('estado_proyectado', 'N/D')
                             sub_p = t.get('subestado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Proyectado: {est_p} ({sub_p})*{tipo_act}")
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Proyectado: {est_p} ({sub_p})*{tipo_act}{uf_txt}")
                         else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}**{tipo_act}")
+                            st.markdown(f"**{icono} {t['categoria'].upper()}**{tipo_act}{uf_txt}")
                         st.markdown(f"**Entregable:** {t['accion']}")
                         
                         nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_hoy_{t['id_transaccion']}")
@@ -719,13 +754,14 @@ def vista_diario():
                         clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
                         icono = "✅" if es_realizado else "⏳"
                         tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
+                        uf_txt = f" | 💰 {float(t.get('honorarios_estimados', 0.0)):,.2f} UF"
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
                             est_p = t.get('estado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Proyectado: {est_p}*{tipo_act}")
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Proyectado: {est_p}*{tipo_act}{uf_txt}")
                         else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*{tipo_act}")
+                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*{tipo_act}{uf_txt}")
                         st.markdown(f"**Entregable:** {t['accion']}")
                         
                         nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_rest_{t['id_transaccion']}")
@@ -744,7 +780,7 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
-                        st.success("¡Base de datos local actualizada!")
+                        st.success("¡Base de datos local actualizada y respaldada!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al escribir en el disco: {e}")
