@@ -46,7 +46,7 @@ init_system()
 apply_custom_styles()
 
 # ---------------------------------------------------------
-# BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL
+# BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
 # ---------------------------------------------------------
 def load_master_base():
     st.sidebar.header("📁 Base Maestra")
@@ -61,25 +61,43 @@ def load_master_base():
             st.sidebar.error(f"Error técnico: {e}")
     return None
 
-def calcular_tramo_uf(fila):
+def calcular_tramo_mcl(fila):
     valor = 0.0
+    divisa = str(fila.get('Divisa', '')).upper()
     if 'Honorarios (UF)' in fila and pd.notna(fila['Honorarios (UF)']):
-        try:
-            valor = float(fila['Honorarios (UF)'])
-        except:
-            pass
+        try: valor = float(fila['Honorarios (UF)'])
+        except: pass
     elif 'Perdida bruta (en moneda del caso)' in fila and pd.notna(fila['Perdida bruta (en moneda del caso)']):
-        try:
-             valor = float(fila['Perdida bruta (en moneda del caso)'])
-        except:
-             pass
+        try: valor = float(fila['Perdida bruta (en moneda del caso)'])
+        except: pass
 
-    if valor <= 1000:
-        return "<= 1000 UF"
-    elif valor <= 5000:
-        return "> 1000 Y <= 5000 UF"
-    else:
-        return "> 5000 UF"
+    is_mcl = False
+    tramo_str = "<= 1000 UF"
+    
+    if 'USD' in divisa or 'US$' in divisa:
+        if valor > 200000:
+            is_mcl = True
+            tramo_str = "> 200.000 USD (MCL)"
+        else:
+            tramo_str = "<= 200.000 USD"
+    else: 
+        if valor <= 1000: tramo_str = "<= 1000 UF"
+        elif valor <= 5000: tramo_str = "> 1000 Y <= 5000 UF"
+        else:
+            is_mcl = True
+            tramo_str = "> 5000 UF (MCL)"
+    return tramo_str, is_mcl
+
+def get_google_sheet():
+    try:
+        if "gcp_service_account" in st.secrets and "google_sheet_url" in st.secrets:
+            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+            client = gspread.authorize(creds)
+            return client.open_by_url(st.secrets["google_sheet_url"]).sheet1
+    except Exception:
+        pass
+    return None
 
 def load_plan_semanal(ajustador):
     week_id = get_week_identifier()
@@ -88,18 +106,26 @@ def load_plan_semanal(ajustador):
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
-    return None, None
+    return [], filepath 
 
 def save_plan_actualizado(filepath, data):
+    # Guardado local híbrido (Mantiene el Gantt operativo)
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+        
+    # Motor de Sincronización Google Sheets (Opción A - Dormido hasta configurar Secrets)
+    sheet = get_google_sheet()
+    if sheet:
+        try:
+            pass # Aquí irá la lógica de volcado directo a celdas en Fase 2
+        except: pass
 
 # ---------------------------------------------------------
-# BLOQUE 2: VISTA - PLANIFICADOR SEMANAL (LUNES)
+# BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # ---------------------------------------------------------
 def vista_planificador():
-    st.title("🗓️ Planificador Semanal")
-    st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar durante la semana en curso.")
+    st.title("🗓️ Planificador Operativo")
+    st.markdown("Seleccione el modelo de planificación y los casos de la Base Maestra.")
     
     CATALOGO_ACCIONES = {
         "En Ajuste": ["Revisión de cobertura", "Revisión de antecedentes", "Otro / Manual"],
@@ -119,16 +145,26 @@ def vista_planificador():
         ajustador_seleccionado = st.selectbox("Identificación de Ajustador:", [""] + ajustadores_validos)
         
         if ajustador_seleccionado:
+            st.markdown("---")
+            tipo_planificacion = st.radio("Seleccione el Tipo de Planificación:", 
+                                         ["Plan Semanal (Regular <= 5000 UF)", "Plan Mensual MCL (> 5000 UF / > 200k USD)"], horizontal=True)
+            
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
+            if "Mensual" in tipo_planificacion:
+                casos_vigentes = casos_vigentes[casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
+                st.warning("📊 Modo Mensual MCL: Mostrando exclusivamente siniestros complejos mayores a 5000 UF o 200.000 USD.")
+                tipo_plan_str = "Mensual"
+            else:
+                casos_vigentes = casos_vigentes[~casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
+                tipo_plan_str = "Semanal"
+                
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
-            st.markdown("---")
             st.header("1. Selección de Casos Operativos")
-            st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles en la Base Maestra.")
+            st.info(f"Inventario Vigente: {len(casos_vigentes)} casos disponibles bajo este filtro.")
             
-            # Función anidada para armar el texto con Nickname en el selector
             def formato_caso_nickname(x):
                 fila = casos_vigentes.loc[x]
                 base_str = f"Caso {fila['Número de caso']} - {fila['Asegurado']}"
@@ -137,7 +173,7 @@ def vista_planificador():
                 return base_str
 
             selected_indices = st.multiselect(
-                "Seleccione los casos que intervendrá esta semana:",
+                "Seleccione los casos que intervendrá:",
                 options=casos_vigentes.index.tolist(),
                 format_func=formato_caso_nickname
             )
@@ -147,7 +183,7 @@ def vista_planificador():
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas y Proyección de Estado")
-                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado para el cierre de la semana, defina la cantidad de actividades y establezca las fechas de compromiso.")
+                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado, defina la cantidad de actividades y establezca las fechas de compromiso.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -155,9 +191,8 @@ def vista_planificador():
                     asegurado = fila['Asegurado']
                     estado_actual = str(fila['Estado']) if 'Estado' in fila and pd.notna(fila['Estado']) else "N/D"
                     subestado_actual = str(fila['Sub estado']) if 'Sub estado' in fila and pd.notna(fila['Sub estado']) else "N/D"
-                    tramo = calcular_tramo_uf(fila)
+                    tramo, is_mcl = calcular_tramo_mcl(fila)
                     
-                    # Extracción del Nickname para la tarjeta visual
                     nickname = ""
                     if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "":
                         nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>"
@@ -214,6 +249,8 @@ def vista_planificador():
                             if accion_final.strip():
                                 plan_transaccional.append({
                                     "id_transaccion": str(uuid.uuid4()),
+                                    "tipo_plan": tipo_plan_str,
+                                    "tipo_actividad": "Programada",
                                     "categoria": "Operativa",
                                     "numero_caso": str(caso_num),
                                     "asegurado": str(asegurado),
@@ -243,26 +280,34 @@ def vista_planificador():
             if comercial_raw.strip():
                 for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": tipo_plan_str, "tipo_actividad": "Programada", "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                     
             if admin_raw.strip():
                 for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
                     plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": tipo_plan_str, "tipo_actividad": "Programada", "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
                 st.info(f"Se han registrado **{len(plan_transaccional)} acciones**.")
-                if st.button("💾 COMPROMETER PLAN SEMANAL"):
+                if st.button(f"💾 COMPROMETER PLAN {tipo_plan_str.upper()}"):
                     try:
                         week_id = get_week_identifier()
                         filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{week_id}.json"
                         filepath = os.path.join(PERSISTENCE_DIR, filename)
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            json.dump(plan_transaccional, f, ensure_ascii=False, indent=4)
-                        st.success("Plan guardado exitosamente.")
+                        
+                        # Combinar planes si el ajustador ya tenía uno guardado (para mezclar Semanal y Mensual)
+                        plan_existente = []
+                        if os.path.exists(filepath):
+                            with open(filepath, 'r', encoding='utf-8') as f:
+                                plan_existente = json.load(f)
+                        
+                        plan_final = plan_existente + plan_transaccional
+                        
+                        save_plan_actualizado(filepath, plan_final)
+                        st.success(f"Plan {tipo_plan_str} guardado exitosamente.")
                     except Exception as e:
                         st.error(f"Error: {e}")
             elif selected_indices:
@@ -271,22 +316,59 @@ def vista_planificador():
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
 # ---------------------------------------------------------
-# BLOQUE 3: VISTA - PROGRAMA DIARIO (MAR a VIE)
+# BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
 # ---------------------------------------------------------
 def vista_diario():
-    st.title("☀️ Ejecución Diaria (Programa Diario)")
+    st.title("☀️ Ejecución y Cumplimiento")
     hoy_str = datetime.now().strftime("%Y-%m-%d")
     st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
     
-    ajustador_input = st.text_input("Ingrese su nombre de Ajustador (Exacto al Plan Semanal):", placeholder="Ej: Francisco Silva Ghisolfo")
+    ajustador_input = st.text_input("Ingrese su nombre de Ajustador (Exacto al Plan Semanal/Mensual):", placeholder="Ej: Francisco Silva Ghisolfo")
     
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
         
-        if plan_data is None:
-            st.warning(f"⚠️ No se encontró un Plan Semanal activo para **{ajustador_input}** en la semana en curso.")
+        # Módulo de Actividades No Programadas
+        st.markdown("---")
+        with st.expander("➕ REGISTRAR ACTIVIDAD NO PROGRAMADA (Urgencias / Fuera de Plan)", expanded=False):
+            st.info("Utilice este módulo para reportar gestiones inmediatas que no estaban en su planificación original (Impactan positivamente en su métrica de cumplimiento).")
+            colNP1, colNP2 = st.columns(2)
+            with colNP1:
+                np_caso = st.text_input("Número de Caso (o Referencia):", key="np_caso")
+                np_asegurado = st.text_input("Asegurado:", key="np_aseg")
+            with colNP2:
+                np_accion = st.text_input("Acción Ejecutada:", key="np_acc")
+                np_fecha = st.date_input("Fecha de Ejecución:", key="np_fec")
+            
+            if st.button("Guardar Actividad No Programada"):
+                if np_caso and np_accion:
+                    nueva_actividad = {
+                        "id_transaccion": str(uuid.uuid4()),
+                        "tipo_plan": "Diario",
+                        "tipo_actividad": "No Programada",
+                        "categoria": "Operativa",
+                        "numero_caso": str(np_caso),
+                        "asegurado": str(np_asegurado),
+                        "tramo_uf": "N/D",
+                        "estado_proyectado": "N/D",
+                        "subestado_proyectado": "N/D",
+                        "accion": np_accion,
+                        "fecha_compromiso": np_fecha.strftime("%Y-%m-%d"),
+                        "estado_cumplimiento": "Realizado",
+                        "fecha_ejecucion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    plan_data.append(nueva_actividad)
+                    save_plan_actualizado(filepath, plan_data)
+                    st.success("Actividad no programada incorporada al reporte general exitosamente.")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada.")
+
+        if not plan_data:
+            st.warning(f"⚠️ No se encontraron compromisos agendados para **{ajustador_input}** en la semana en curso.")
         else:
-            st.success("Plan Semanal sincronizado correctamente.")
+            st.success("Plan Operativo sincronizado correctamente.")
             st.markdown("---")
             
             tareas_hoy = []
@@ -313,15 +395,16 @@ def vista_diario():
                         es_realizado = (estado_actual == "Realizado")
                         clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
                         icono = "✅" if es_realizado else "⚡"
+                        tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
                             est_p = t.get('estado_proyectado', 'N/D')
                             sub_p = t.get('subestado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Estado Proyectado: {est_p} ({sub_p})*")
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Proyectado: {est_p} ({sub_p})*{tipo_act}")
                         else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}**")
-                        st.markdown(f"**Entregable Comprometido:** {t['accion']}")
+                            st.markdown(f"**{icono} {t['categoria'].upper()}**{tipo_act}")
+                        st.markdown(f"**Entregable:** {t['accion']}")
                         
                         nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_hoy_{t['id_transaccion']}")
                         nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
@@ -331,24 +414,25 @@ def vista_diario():
                             cambios_realizados = True
                         st.markdown('</div>', unsafe_allow_html=True)
                 else:
-                    st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy. Abajo se despliega tu planificación semanal.")
+                    st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy. Abajo se despliega tu planificación extendida.")
 
                 if tareas_resto:
-                    st.subheader("📅 Resto de la Planificación Semanal")
+                    st.subheader("📅 Resto de la Planificación (Semanal y Mensual)")
                     for t in tareas_resto:
                         pos = t['_posicion_original']
                         estado_actual = t.get("estado_cumplimiento", "Pendiente")
                         es_realizado = (estado_actual == "Realizado")
                         clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
                         icono = "✅" if es_realizado else "⏳"
+                        tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
                         
                         st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
                         if t["categoria"] == "Operativa":
                             est_p = t.get('estado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Estado Proyectado: {est_p}*")
+                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Proyectado: {est_p}*{tipo_act}")
                         else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*")
-                        st.markdown(f"**Entregable Comprometido:** {t['accion']}")
+                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*{tipo_act}")
+                        st.markdown(f"**Entregable:** {t['accion']}")
                         
                         nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_rest_{t['id_transaccion']}")
                         nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
@@ -367,7 +451,7 @@ def vista_diario():
                     try:
                         save_plan_actualizado(filepath, plan_data)
                         st.success("¡Base de datos local actualizada!")
-                        st.experimental_rerun()
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error al escribir en el disco: {e}")
                 else:
@@ -376,7 +460,7 @@ def vista_diario():
             st.markdown("---")
             progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
             st.progress(progreso)
-            st.caption(f"Avance de la semana: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
+            st.caption(f"Avance de cumplimiento global: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT EXCEL/WORD)
