@@ -53,19 +53,118 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
+# VERSIÓN: 2.1 (Persistencia Base Maestra y Motor Nube)
 # ---------------------------------------------------------
+def get_google_client():
+    try:
+        if "gcp_service_account" in st.secrets and "google_sheet_url" in st.secrets:
+            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+            return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"⚠️ Error crítico de conexión a Google Cloud: {e}")
+    return None
+
+def get_google_sheet():
+    client = get_google_client()
+    if client:
+        try:
+            return client.open_by_url(st.secrets["google_sheet_url"]).sheet1
+        except Exception as e:
+            st.error(f"⚠️ Error al abrir la hoja de cálculo: {e}")
+    return None
+
 def load_master_base():
     st.sidebar.header("📁 Base Maestra")
-    uploaded_file = st.sidebar.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
-    if uploaded_file is not None:
+    filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    
+    df_local = None
+    fecha_actualizacion = None
+    
+    # 1. Recuperación en silencio desde Google Sheets (Pestaña Dedicada) si no hay base local
+    if not os.path.exists(filepath):
+        client = get_google_client()
+        if client:
+            try:
+                doc = client.open_by_url(st.secrets["google_sheet_url"])
+                ws = doc.worksheet("Base_Maestra")
+                metadata = ws.row_values(1)
+                
+                if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+                    fecha_str = metadata[1]
+                    # Extraer datos reales saltando la primera fila de metadata
+                    datos_crud = ws.get_all_records(head=2) 
+                    df_local = pd.DataFrame(datos_crud)
+                    
+                    # Crear copia de caché local ultra-rápida
+                    datos_guardar = {"fecha": fecha_str, "data": df_local.to_dict(orient="records")}
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(datos_guardar, f, ensure_ascii=False)
+            except Exception:
+                pass
+                
+    # 2. Lectura de caché local
+    if os.path.exists(filepath):
         try:
-            if uploaded_file.name.endswith('.xlsx'):
-                return pd.read_excel(uploaded_file, skiprows=5)
-            else:
-                return pd.read_csv(uploaded_file, skiprows=5)
-        except Exception as e:
-            st.sidebar.error(f"Error técnico: {e}")
-    return None
+            with open(filepath, 'r', encoding='utf-8') as f:
+                datos = json.load(f)
+                df_local = pd.DataFrame(datos['data'])
+                fecha_actualizacion = datetime.strptime(datos['fecha'], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+    # 3. Lógica de Semáforo y Caducidad (7 Días)
+    necesita_actualizacion = True
+    if fecha_actualizacion:
+        dias = (datetime.now() - fecha_actualizacion).days
+        if dias <= 7:
+            st.sidebar.success(f"✅ Base actualizada hace {dias} días ({fecha_actualizacion.strftime('%d/%m/%Y')})")
+            necesita_actualizacion = False
+        else:
+            st.sidebar.error(f"🚨 Base caducada (hace {dias} días). Requiere actualización urgente.")
+    else:
+        st.sidebar.warning("⚠️ No hay base de datos en el sistema.")
+
+    # 4. Motor de Carga y Respaldo Nube
+    with st.sidebar.expander("📥 Subir / Actualizar Base Maestra", expanded=necesita_actualizacion):
+        uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.xlsx'):
+                    df_nuevo = pd.read_excel(uploaded_file, skiprows=5)
+                else:
+                    df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
+                
+                # Blindaje de datos: Reemplazar nulos para que Google y JSON no fallen
+                df_nuevo = df_nuevo.fillna("") 
+                fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Guardado Caché Local
+                datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(datos_guardar, f, ensure_ascii=False)
+                    
+                # Guardado en Google Sheets (Creación automática de pestaña si no existe)
+                client = get_google_client()
+                if client:
+                    doc = client.open_by_url(st.secrets["google_sheet_url"])
+                    try:
+                        ws = doc.worksheet("Base_Maestra")
+                    except:
+                        ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
+                    
+                    ws.clear()
+                    matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
+                    matriz.append(df_nuevo.columns.astype(str).tolist())
+                    matriz.extend(df_nuevo.values.tolist())
+                    ws.update("A1", matriz)
+
+                st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Error técnico al guardar base: {e}")
+                
+    return df_local
 
 def limpiar_monto_mcl(valor):
     if pd.isna(valor) or str(valor).strip() == "": return 0.0
@@ -110,17 +209,6 @@ def calcular_tramo_mcl(fila):
             tramo_str = "> 5000 UF (MCL)"
             
     return tramo_str, is_mcl
-
-def get_google_sheet():
-    try:
-        if "gcp_service_account" in st.secrets and "google_sheet_url" in st.secrets:
-            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-            client = gspread.authorize(creds)
-            return client.open_by_url(st.secrets["google_sheet_url"]).sheet1
-    except Exception as e:
-        st.error(f"⚠️ Error crítico de conexión a Google Sheets: {e}")
-    return None
 
 def get_month_identifier(offset_months=0):
     now = datetime.now()
@@ -204,6 +292,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
+# VERSIÓN: 2.1 (Inyección de Honorarios)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     col_t1, col_t2 = st.columns([2, 1])
@@ -321,6 +410,15 @@ def vista_planificador(modo="Semanal"):
                     subestado_actual = str(fila['Sub estado']) if 'Sub estado' in fila and pd.notna(fila['Sub estado']) else "N/D"
                     tramo, is_mcl = calcular_tramo_mcl(fila)
                     
+                    # Motor de extracción de honorarios (Columna BO = Índice 66 en Pandas)
+                    honorarios_estimados = 0.0
+                    try:
+                        if len(casos_vigentes.columns) >= 67:
+                            valor_bo = fila.iloc[66] 
+                            honorarios_estimados = limpiar_monto_mcl(valor_bo)
+                    except Exception:
+                        pass
+                    
                     nickname = ""
                     if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "":
                         nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>"
@@ -383,6 +481,7 @@ def vista_planificador(modo="Semanal"):
                                     "numero_caso": str(caso_num),
                                     "asegurado": str(asegurado),
                                     "tramo_uf": tramo,
+                                    "honorarios_estimados": honorarios_estimados,
                                     "estado_proyectado": estado_proyectado,
                                     "subestado_proyectado": subestado_proyectado,
                                     "accion": accion_final,
@@ -410,6 +509,7 @@ def vista_planificador(modo="Semanal"):
                         plan_transaccional.append({
                             "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
                             "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                            "honorarios_estimados": 0.0,
                             "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_com.strip(), 
                             "fecha_compromiso": fec_com.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
                             "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -430,6 +530,7 @@ def vista_planificador(modo="Semanal"):
                         plan_transaccional.append({
                             "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
                             "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                            "honorarios_estimados": 0.0,
                             "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_adm.strip(), 
                             "fecha_compromiso": fec_adm.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
                             "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
