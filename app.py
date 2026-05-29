@@ -289,29 +289,47 @@ def vista_planificador(modo="Semanal"):
             
             with col1:
                 st.markdown('<div class="marco-gestion"><h4>🤝 Gestión Comercial</h4></div>', unsafe_allow_html=True)
-                comercial_raw = st.text_area("Reuniones, visitas a corredoras, etc. (Una por línea):", key="txt_comercial", height=150)
-                fecha_comercial = st.date_input("Fecha para Comercial:", key="fecha_com")
+                num_comercial = st.number_input("Cantidad de gestiones comerciales:", min_value=0, max_value=15, value=1, key="num_comercial")
+                
+                for i in range(1, int(num_comercial) + 1):
+                    c_acc, c_fec = st.columns([2, 1])
+                    with c_acc:
+                        acc_com = st.text_input(f"Detalle gestión {i}:", placeholder="Reuniones, visitas a corredoras...", key=f"txt_com_{i}")
+                    with c_fec:
+                        fec_com = st.date_input(f"Fecha {i}:", key=f"fec_com_{i}")
+                    
+                    if acc_com.strip():
+                        plan_transaccional.append({
+                            "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                            "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                            "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_com.strip(), 
+                            "fecha_compromiso": fec_com.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
+                            "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
             
             with col2:
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
-                admin_raw = st.text_area("Capacitaciones, comités, trámites, etc. (Una por línea):", key="txt_admin", height=150)
-                fecha_admin = st.date_input("Fecha para Administrativa:", key="fecha_adm")
-            
-            if comercial_raw.strip():
-                for accion in [linea.strip() for linea in comercial_raw.split('\n') if linea.strip()]:
-                    plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_comercial.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                num_admin = st.number_input("Cantidad de gestiones administrativas:", min_value=0, max_value=15, value=1, key="num_admin")
+                
+                for i in range(1, int(num_admin) + 1):
+                    c_acc, c_fec = st.columns([2, 1])
+                    with c_acc:
+                        acc_adm = st.text_input(f"Detalle gestión {i}:", placeholder="Capacitaciones, comités...", key=f"txt_adm_{i}")
+                    with c_fec:
+                        fec_adm = st.date_input(f"Fecha {i}:", key=f"fec_adm_{i}")
                     
-            if admin_raw.strip():
-                for accion in [linea.strip() for linea in admin_raw.split('\n') if linea.strip()]:
-                    plan_transaccional.append({
-                        "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": accion, "fecha_compromiso": fecha_admin.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                    if acc_adm.strip():
+                        plan_transaccional.append({
+                            "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                            "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                            "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_adm.strip(), 
+                            "fecha_compromiso": fec_adm.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
+                            "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
-                st.info(f"Se han registrado **{len(plan_transaccional)} acciones**.")
+                st.info(f"Se han registrado **{len(plan_transaccional)} acciones** en total.")
                 if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
                     try:
                         week_id = get_week_identifier()
@@ -329,8 +347,8 @@ def vista_planificador(modo="Semanal"):
                         st.success(f"Plan {modo} guardado exitosamente.")
                     except Exception as e:
                         st.error(f"Error: {e}")
-            elif selected_indices:
-                st.warning("Debe seleccionar al menos una acción válida para guardar el plan.")
+            elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
+                st.warning("Complete el detalle de las acciones o seleccione casos válidos para guardar el plan.")
     else:
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
