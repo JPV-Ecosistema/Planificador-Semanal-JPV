@@ -118,9 +118,24 @@ def get_google_sheet():
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
             client = gspread.authorize(creds)
             return client.open_by_url(st.secrets["google_sheet_url"]).sheet1
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"⚠️ Error crítico de conexión a Google Sheets: {e}")
     return None
+
+def sync_from_cloud(filename, filepath):
+    sheet = get_google_sheet()
+    if sheet:
+        try:
+            registros = sheet.get_all_records()
+            for fila in registros:
+                if str(fila.get('Archivo', '')) == filename:
+                    datos_json = json.loads(fila.get('JSON_Data', '[]'))
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(datos_json, f, ensure_ascii=False, indent=4)
+                    return datos_json
+        except Exception as e:
+            st.error(f"⚠️ Error al descargar respaldo desde la nube: {e}")
+    return []
 
 def load_plan_semanal(ajustador, offset_weeks=0):
     week_id = get_week_identifier(offset_weeks)
@@ -129,7 +144,9 @@ def load_plan_semanal(ajustador, offset_weeks=0):
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
-    return [], filepath 
+    else:
+        data = sync_from_cloud(filename, filepath)
+        return data, filepath 
 
 def load_plan_mensual(ajustador):
     filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}.json"
@@ -137,17 +154,46 @@ def load_plan_mensual(ajustador):
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
-    return [], filepath
+    else:
+        data = sync_from_cloud(filename, filepath)
+        return data, filepath
 
 def save_plan_actualizado(filepath, data):
+    # 1. Guardado Local Inmediato
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
         
+    # 2. Respaldo Activo en la Bóveda de Google Sheets
     sheet = get_google_sheet()
     if sheet:
         try:
-            pass # Sincronización Google en Fase 2
-        except: pass
+            filename = os.path.basename(filepath)
+            json_str = json.dumps(data, ensure_ascii=False)
+            fecha_upd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            try:
+                headers = sheet.row_values(1)
+            except:
+                headers = []
+                
+            if not headers or 'Archivo' not in headers:
+                sheet.clear()
+                sheet.append_row(['Archivo', 'JSON_Data', 'Ultima_Actualizacion'])
+                sheet.append_row([filename, json_str, fecha_upd])
+                return
+
+            col_archivo_idx = headers.index('Archivo') + 1
+            archivos_en_nube = sheet.col_values(col_archivo_idx)
+            
+            if filename in archivos_en_nube:
+                fila_idx = archivos_en_nube.index(filename) + 1
+                rango = f'A{fila_idx}:C{fila_idx}'
+                # Formato posicional estándar compatible con todas las versiones de gspread
+                sheet.update(rango, [[filename, json_str, fecha_upd]])
+            else:
+                sheet.append_row([filename, json_str, fecha_upd])
+        except Exception as e:
+            st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # ---------------------------------------------------------
