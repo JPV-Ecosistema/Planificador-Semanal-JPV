@@ -360,7 +360,23 @@ def vista_diario():
     hoy_str = datetime.now().strftime("%Y-%m-%d")
     st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
     
-    ajustador_input = st.text_input("Ingrese su nombre de Ajustador (Exacto al Plan Semanal/Mensual):", placeholder="Ej: Francisco Silva Ghisolfo")
+    # --- MOTOR DE BÚSQUEDA AUTOMÁTICA DE AJUSTADORES ---
+    week_id = get_week_identifier()
+    try:
+        archivos = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith(f'_{week_id}.json')]
+        ajustadores_con_plan = []
+        for archivo in archivos:
+            nombre = archivo.replace('plan_', '').replace(f'_{week_id}.json', '').replace('_', ' ')
+            ajustadores_con_plan.append(nombre)
+        ajustadores_con_plan = sorted(list(set(ajustadores_con_plan)))
+    except Exception:
+        ajustadores_con_plan = []
+
+    if not ajustadores_con_plan:
+        st.info("⚠️ Ningún ajustador ha comprometido su Plan Operativo para esta semana en la base del sistema.")
+        return
+
+    ajustador_input = st.selectbox("Seleccione su nombre de Ajustador:", [""] + ajustadores_con_plan)
     
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
