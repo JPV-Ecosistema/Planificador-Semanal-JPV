@@ -636,13 +636,15 @@ def main():
     
     opcion = st.sidebar.radio(
         "Ir a:",
-        ["Planificador Semanal", "Programa Diario", "Reportes Jefatura"]
+        ["Planificador Semanal", "Planificador Mensual MCL", "Programa Diario", "Reportes Jefatura"]
     )
     
     st.sidebar.markdown("---")
     
     if opcion == "Planificador Semanal":
-        vista_planificador()
+        vista_planificador("Semanal")
+    elif opcion == "Planificador Mensual MCL":
+        vista_planificador("Mensual")
     elif opcion == "Programa Diario":
         vista_diario()
     elif opcion == "Reportes Jefatura":
