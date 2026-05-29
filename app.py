@@ -310,7 +310,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.1 (Inyección de Honorarios)
+# VERSIÓN: 2.2 (Autogestión de Reseteo Corporativo)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     col_t1, col_t2 = st.columns([2, 1])
@@ -361,6 +361,37 @@ def vista_planificador(modo="Semanal"):
                 
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
+
+            # ---------------------------------------------------------
+            # MOTOR DE RESETEO DE PLANIFICACIÓN (ZONA DE CONTROL)
+            # ---------------------------------------------------------
+            if modo == "Mensual":
+                _, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
+            else:
+                t_week_id = get_week_identifier(offset_weeks)
+                path_boveda = os.path.join(PERSISTENCE_DIR, f"plan_{ajustador_seleccionado.replace(' ', '_')}_{t_week_id}.json")
+            
+            plan_historico = []
+            if os.path.exists(path_boveda):
+                try:
+                    with open(path_boveda, 'r', encoding='utf-8') as f:
+                        plan_historico = json.load(f)
+                except:
+                    pass
+            
+            if plan_historico:
+                with st.expander("🚨 Zona de Control: Modificar / Resetear Período Activo", expanded=False):
+                    st.warning(f"Atención: Ya tienes un plan comprometido para este período con {len(plan_historico)} acciones registradas en el sistema.")
+                    st.markdown("Si cometiste un error en las fechas, tramos o asignaciones, puedes vaciar el plan actual para volver a formularlo de manera correcta.")
+                    if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
+                        try:
+                            # Sobreescritura atómica con lista vacía en local y nube corporativa
+                            save_plan_actualizado(path_boveda, [])
+                            st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
+                            st.rerun()
+                        except Exception as reset_err:
+                            st.error(f"Error al ejecutar el reseteo: {reset_err}")
+            # ---------------------------------------------------------
 
             plan_transaccional = []
             
@@ -428,7 +459,6 @@ def vista_planificador(modo="Semanal"):
                     subestado_actual = str(fila['Sub estado']) if 'Sub estado' in fila and pd.notna(fila['Sub estado']) else "N/D"
                     tramo, is_mcl = calcular_tramo_mcl(fila)
                     
-                    # Motor de extracción de honorarios (Columna BO = Índice 66 en Pandas)
                     honorarios_estimados = 0.0
                     try:
                         if len(casos_vigentes.columns) >= 67:
