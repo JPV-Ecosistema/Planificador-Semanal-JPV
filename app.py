@@ -122,6 +122,15 @@ def get_google_sheet():
         st.error(f"⚠️ Error crítico de conexión a Google Sheets: {e}")
     return None
 
+def get_month_identifier(offset_months=0):
+    now = datetime.now()
+    year = now.year
+    month = now.month + offset_months
+    while month > 12:
+        month -= 12
+        year += 1
+    return f"{year}_{month:02d}"
+
 def sync_from_cloud(filename, filepath):
     sheet = get_google_sheet()
     if sheet:
@@ -148,8 +157,9 @@ def load_plan_semanal(ajustador, offset_weeks=0):
         data = sync_from_cloud(filename, filepath)
         return data, filepath 
 
-def load_plan_mensual(ajustador):
-    filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}.json"
+def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
+    month_id = explicit_month_id if explicit_month_id else get_month_identifier(offset_months)
+    filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}_{month_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -159,11 +169,9 @@ def load_plan_mensual(ajustador):
         return data, filepath
 
 def save_plan_actualizado(filepath, data):
-    # 1. Guardado Local Inmediato
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
         
-    # 2. Respaldo Activo en la Bóveda de Google Sheets
     sheet = get_google_sheet()
     if sheet:
         try:
@@ -188,12 +196,12 @@ def save_plan_actualizado(filepath, data):
             if filename in archivos_en_nube:
                 fila_idx = archivos_en_nube.index(filename) + 1
                 rango = f'A{fila_idx}:C{fila_idx}'
-                # Formato posicional estándar compatible con todas las versiones de gspread
                 sheet.update(rango, [[filename, json_str, fecha_upd]])
             else:
                 sheet.append_row([filename, json_str, fecha_upd])
         except Exception as e:
             st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
+
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # ---------------------------------------------------------
@@ -208,11 +216,14 @@ def vista_planificador(modo="Semanal"):
             st.markdown("Gestión estratégica de casos complejos (Major and Complex Losses > 5000 UF / > 200k USD).")
             
     with col_t2:
+        st.markdown("<br>", unsafe_allow_html=True)
         if modo == "Semanal":
-            st.markdown("<br>", unsafe_allow_html=True)
             semana_opcion = st.radio("¿Qué semana estás planificando?", ["Semana Actual", "Próxima Semana"], horizontal=True)
             offset_weeks = 0 if semana_opcion == "Semana Actual" else 1
+            offset_months = 0
         else:
+            mes_opcion = st.radio("¿Qué mes estás planificando?", ["Mes Actual", "Próximo Mes"], horizontal=True)
+            offset_months = 0 if mes_opcion == "Mes Actual" else 1
             offset_weeks = 0
             
     CATALOGO_ACCIONES = {
@@ -237,7 +248,7 @@ def vista_planificador(modo="Semanal"):
             
             if modo == "Mensual":
                 casos_vigentes = casos_vigentes[casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
-                st.warning("📊 Filtro MCL Activo: Mostrando exclusivamente siniestros complejos.")
+                st.warning(f"📊 Filtro MCL Activo ({mes_opcion}): Mostrando exclusivamente siniestros complejos.")
             else:
                 casos_vigentes = casos_vigentes[~casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
                 
@@ -246,9 +257,11 @@ def vista_planificador(modo="Semanal"):
 
             plan_transaccional = []
             
-            # --- LÓGICA DE HERENCIA MCL EN CASCADA ---
+            # --- LÓGICA DE HERENCIA MCL EN CASCADA POR PERÍODO MENSUAL ---
             if modo == "Semanal":
-                mcl_data, mcl_path = load_plan_mensual(ajustador_seleccionado)
+                target_date = datetime.now() + timedelta(weeks=offset_weeks)
+                target_month_id = target_date.strftime("%Y_%m")
+                mcl_data, mcl_path = load_plan_mensual(ajustador_seleccionado, explicit_month_id=target_month_id)
                 target_week_id = get_week_identifier(offset_weeks)
                 
                 mcl_pendientes = []
@@ -262,7 +275,7 @@ def vista_planificador(modo="Semanal"):
                 if mcl_pendientes:
                     st.markdown("---")
                     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar día)</h4></div>', unsafe_allow_html=True)
-                    st.info("Estos compromisos fueron proyectados en tu Planificador Mensual para ejecutarse en esta semana. Asígnales un día específico para incorporarlos a tu agenda.")
+                    st.info(f"Estos compromisos provienen de tu Planificador Mensual de {target_date.strftime('%B %Y')}. Asígnales un día específico para incorporarlos a tu agenda semanal.")
                     
                     for idx, mcl_task in enumerate(mcl_pendientes):
                         c1, c2 = st.columns([3, 1])
@@ -273,7 +286,6 @@ def vista_planificador(modo="Semanal"):
                             fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
                             nueva_fecha_mcl = st.date_input(f"Día de ejecución:", value=fec_obj, key=f"mcl_fec_{idx}")
                             
-                        # Transformamos el hito en tarea semanal
                         task_to_add = mcl_task.copy()
                         task_to_add['fecha_compromiso'] = nueva_fecha_mcl.strftime("%Y-%m-%d")
                         task_to_add['id_mcl_origen'] = mcl_task['id_transaccion'] 
@@ -429,13 +441,13 @@ def vista_planificador(modo="Semanal"):
                 if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
                     try:
                         if modo == "Mensual":
-                            _, filepath = load_plan_mensual(ajustador_seleccionado)
+                            _, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             plan_existente = []
                             if os.path.exists(filepath):
                                 with open(filepath, 'r', encoding='utf-8') as f:
                                     plan_existente = json.load(f)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success("Plan Mensual MCL guardado exitosamente en la bóveda.")
+                            st.success(f"Plan Mensual MCL ({mes_opcion}) guardado exitosamente en la bóveda y respaldado en la nube.")
                         else:
                             target_week_id = get_week_identifier(offset_weeks)
                             filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{target_week_id}.json"
@@ -446,7 +458,6 @@ def vista_planificador(modo="Semanal"):
                                 with open(filepath, 'r', encoding='utf-8') as f:
                                     plan_existente = json.load(f)
                                     
-                            # Marcador para evitar que la tarea MCL vuelva a pedir fecha la próxima vez que abran el semanal
                             if 'mcl_data' in locals() and mcl_data:
                                 mcl_ids_agendados = [t['id_mcl_origen'] for t in plan_transaccional if 'id_mcl_origen' in t]
                                 for t in mcl_data:
@@ -455,7 +466,7 @@ def vista_planificador(modo="Semanal"):
                                 save_plan_actualizado(mcl_path, mcl_data) 
                                 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Plan Semanal guardado exitosamente para la {semana_opcion}.")
+                            st.success(f"Plan Semanal guardado exitosamente para la {semana_opcion} y respaldado en la nube.")
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
