@@ -53,7 +53,7 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
-# VERSIÓN: 2.1.2 (Sanitización Extrema NaN Base Maestra)
+# VERSIÓN: 2.1.3 (Fix 429 Quota & Protocolo Resiliencia)
 # ---------------------------------------------------------
 def get_google_client():
     try:
@@ -138,13 +138,9 @@ def load_master_base():
                 # ---------------------------------------------------------
                 # BLINDAJE EXTREMO CONTRA NaN Y DATOS TÓXICOS
                 # ---------------------------------------------------------
-                # 1. Rellenar vacíos de Pandas con espacios en blanco
                 df_nuevo = df_nuevo.fillna("") 
-                
-                # 2. Forzar conversión absoluta de cada columna a Texto puro
                 for col in df_nuevo.columns:
                     df_nuevo[col] = df_nuevo[col].astype(str)
-                    # 3. Limpiar cualquier "fantasma" que se haya convertido en la palabra 'nan'
                     df_nuevo[col] = df_nuevo[col].apply(
                         lambda x: "" if str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
                     )
@@ -152,30 +148,40 @@ def load_master_base():
 
                 fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # Guardado Caché Local
+                # Guardado Caché Local INMEDIATO (Garantiza el funcionamiento de la app)
                 datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(datos_guardar, f, ensure_ascii=False)
                     
-                # Guardado en Google Sheets
-                client = get_google_client()
-                if client:
-                    doc = client.open_by_url(st.secrets["google_sheet_url"])
-                    try:
-                        ws = doc.worksheet("Base_Maestra")
-                    except:
-                        ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
-                    
-                    ws.clear()
-                    matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
-                    matriz.append(df_nuevo.columns.astype(str).tolist())
-                    matriz.extend(df_nuevo.values.tolist())
-                    ws.update("A1", matriz)
+                # Protocolo de Resiliencia Nube
+                try:
+                    client = get_google_client()
+                    if client:
+                        doc = client.open_by_url(st.secrets["google_sheet_url"])
+                        try:
+                            ws = doc.worksheet("Base_Maestra")
+                        except:
+                            ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
+                        
+                        ws.clear()
+                        matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
+                        matriz.append(df_nuevo.columns.astype(str).tolist())
+                        matriz.extend(df_nuevo.values.tolist())
+                        
+                        # Orden correcto de parámetros para un solo request limpio
+                        ws.update("A1", matriz)
 
-                st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
-                st.rerun()
+                    st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
+                except Exception as cloud_error:
+                    if "429" in str(cloud_error):
+                        st.warning("⚠️ Base guardada localmente con éxito. Google Cloud está en pausa (Límite 429 de peticiones). Puedes operar tu planificador normalmente.")
+                    else:
+                        st.warning(f"⚠️ Base guardada localmente. Hubo un detalle con el respaldo en nube: {cloud_error}")
+                
+                # Esto garantiza que el usuario siempre avance sin quedar atrapado
+                st.rerun() 
             except Exception as e:
-                st.sidebar.error(f"Error técnico al guardar base: {e}")
+                st.sidebar.error(f"Error crítico al procesar el Excel: {e}")
                 
     return df_local
 
@@ -302,6 +308,7 @@ def save_plan_actualizado(filepath, data):
                 sheet.append_row([filename, json_str, fecha_upd])
         except Exception as e:
             st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
+
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # VERSIÓN: 2.1 (Inyección de Honorarios)
