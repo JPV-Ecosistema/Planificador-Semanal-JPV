@@ -86,20 +86,17 @@ def calcular_tramo_mcl(fila):
     valor = 0.0
     divisa = str(fila.get('Divisa', '')).upper()
     
-    # Búsqueda difusa para evadir errores de tildes o espacios ocultos en el Excel
-    col_honorarios = next((c for c in fila.keys() if 'honorarios' in str(c).lower() and 'uf' in str(c).lower()), None)
-    col_perdida = next((c for c in fila.keys() if 'perdida bruta' in str(c).lower() or 'pérdida bruta' in str(c).lower()), None)
+    # Lectura estricta y exclusiva de la columna BI ('Perdida bruta (en moneda del caso)')
+    col_perdida = 'Perdida bruta (en moneda del caso)'
     
-    if col_honorarios and pd.notna(fila[col_honorarios]):
-        valor = limpiar_monto_mcl(fila[col_honorarios])
-    elif col_perdida and pd.notna(fila[col_perdida]):
+    if col_perdida in fila and pd.notna(fila[col_perdida]):
         valor = limpiar_monto_mcl(fila[col_perdida])
 
     is_mcl = False
     tramo_str = "<= 1000 UF"
     
-    # Filtro lógico
-    if 'USD' in divisa or 'US$' in divisa or 'DÓLAR' in divisa:
+    # Filtro lógico para Major and Complex Losses
+    if 'USD' in divisa or 'US$' in divisa or 'DÓLAR' in divisa or 'DOLAR' in divisa:
         if valor > 200000:
             is_mcl = True
             tramo_str = "> 200.000 USD (MCL)"
@@ -141,7 +138,7 @@ def save_plan_actualizado(filepath, data):
     sheet = get_google_sheet()
     if sheet:
         try:
-            pass
+            pass # Sincronización Google en Fase 2
         except: pass
 
 # ---------------------------------------------------------
