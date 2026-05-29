@@ -365,10 +365,10 @@ def vista_diario():
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
         
-        # Módulo de Actividades No Programadas
+        # Módulo de Actividades No Programadas (Urgencias)
         st.markdown("---")
         with st.expander("➕ REGISTRAR ACTIVIDAD NO PROGRAMADA (Urgencias / Fuera de Plan)", expanded=False):
-            st.info("Utilice este módulo para reportar gestiones inmediatas que no estaban en su planificación original (Impactan positivamente en su métrica de cumplimiento).")
+            st.info("Utilice este módulo para reportar gestiones inmediatas que no estaban en su planificación original. Estas impactan positivamente en su métrica de cumplimiento global.")
             colNP1, colNP2 = st.columns(2)
             with colNP1:
                 np_caso = st.text_input("Número de Caso (o Referencia):", key="np_caso")
@@ -391,7 +391,7 @@ def vista_diario():
                         "subestado_proyectado": "N/D",
                         "accion": np_accion,
                         "fecha_compromiso": np_fecha.strftime("%Y-%m-%d"),
-                        "estado_cumplimiento": "Realizado",
+                        "estado_cumplimiento": "Realizado", # Se marca como realizado automáticamente
                         "fecha_ejecucion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
