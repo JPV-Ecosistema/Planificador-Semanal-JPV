@@ -53,7 +53,7 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
-# VERSIÓN: 2.1.1 (Fix Timestamps Base Maestra)
+# VERSIÓN: 2.1.2 (Sanitización Extrema NaN Base Maestra)
 # ---------------------------------------------------------
 def get_google_client():
     try:
@@ -135,8 +135,21 @@ def load_master_base():
                 else:
                     df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
                 
-                # Blindaje de datos estricto: Convertir todo a texto para evitar caída de JSON por fechas
-                df_nuevo = df_nuevo.astype(str).replace(["nan", "NaT", "<NA>", "None"], "")
+                # ---------------------------------------------------------
+                # BLINDAJE EXTREMO CONTRA NaN Y DATOS TÓXICOS
+                # ---------------------------------------------------------
+                # 1. Rellenar vacíos de Pandas con espacios en blanco
+                df_nuevo = df_nuevo.fillna("") 
+                
+                # 2. Forzar conversión absoluta de cada columna a Texto puro
+                for col in df_nuevo.columns:
+                    df_nuevo[col] = df_nuevo[col].astype(str)
+                    # 3. Limpiar cualquier "fantasma" que se haya convertido en la palabra 'nan'
+                    df_nuevo[col] = df_nuevo[col].apply(
+                        lambda x: "" if str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
+                    )
+                # ---------------------------------------------------------
+
                 fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Guardado Caché Local
@@ -144,7 +157,7 @@ def load_master_base():
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(datos_guardar, f, ensure_ascii=False)
                     
-                # Guardado en Google Sheets (Creación automática de pestaña si no existe)
+                # Guardado en Google Sheets
                 client = get_google_client()
                 if client:
                     doc = client.open_by_url(st.secrets["google_sheet_url"])
@@ -157,7 +170,7 @@ def load_master_base():
                     matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
                     matriz.append(df_nuevo.columns.astype(str).tolist())
                     matriz.extend(df_nuevo.values.tolist())
-                    ws.update(matriz, "A1")
+                    ws.update("A1", matriz)
 
                 st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
                 st.rerun()
@@ -167,7 +180,7 @@ def load_master_base():
     return df_local
 
 def limpiar_monto_mcl(valor):
-    if pd.isna(valor) or str(valor).strip() in ["", "nan", "NaT"]: return 0.0
+    if pd.isna(valor) or str(valor).strip() in ["", "nan", "NaN", "NaT"]: return 0.0
     if isinstance(valor, (int, float)): return float(valor)
     
     v_str = str(valor).strip().replace('$', '').replace(' ', '')
@@ -289,7 +302,6 @@ def save_plan_actualizado(filepath, data):
                 sheet.append_row([filename, json_str, fecha_upd])
         except Exception as e:
             st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
-
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # VERSIÓN: 2.1 (Inyección de Honorarios)
