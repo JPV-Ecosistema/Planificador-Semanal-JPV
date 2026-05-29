@@ -61,20 +61,45 @@ def load_master_base():
             st.sidebar.error(f"Error técnico: {e}")
     return None
 
+def limpiar_monto_mcl(valor):
+    if pd.isna(valor) or str(valor).strip() == "": return 0.0
+    if isinstance(valor, (int, float)): return float(valor)
+    
+    # Limpieza agresiva de textos financieros
+    v_str = str(valor).strip().replace('$', '').replace(' ', '')
+    
+    # Manejo robusto de formato chileno vs formato americano
+    if '.' in v_str and ',' in v_str:
+        if v_str.rfind(',') > v_str.rfind('.'): # Ej: 1.500.000,50
+            v_str = v_str.replace('.', '').replace(',', '.')
+        else: # Ej: 1,500,000.50
+            v_str = v_str.replace(',', '')
+    elif ',' in v_str: # Ej: 1500,50
+        v_str = v_str.replace(',', '.')
+        
+    try:
+        return float(v_str)
+    except:
+        return 0.0
+
 def calcular_tramo_mcl(fila):
     valor = 0.0
     divisa = str(fila.get('Divisa', '')).upper()
-    if 'Honorarios (UF)' in fila and pd.notna(fila['Honorarios (UF)']):
-        try: valor = float(fila['Honorarios (UF)'])
-        except: pass
-    elif 'Perdida bruta (en moneda del caso)' in fila and pd.notna(fila['Perdida bruta (en moneda del caso)']):
-        try: valor = float(fila['Perdida bruta (en moneda del caso)'])
-        except: pass
+    
+    # Búsqueda difusa para evadir errores de tildes o espacios ocultos en el Excel
+    col_honorarios = next((c for c in fila.keys() if 'honorarios' in str(c).lower() and 'uf' in str(c).lower()), None)
+    col_perdida = next((c for c in fila.keys() if 'perdida bruta' in str(c).lower() or 'pérdida bruta' in str(c).lower()), None)
+    
+    if col_honorarios and pd.notna(fila[col_honorarios]):
+        valor = limpiar_monto_mcl(fila[col_honorarios])
+    elif col_perdida and pd.notna(fila[col_perdida]):
+        valor = limpiar_monto_mcl(fila[col_perdida])
 
     is_mcl = False
     tramo_str = "<= 1000 UF"
     
-    if 'USD' in divisa or 'US$' in divisa:
+    # Filtro lógico
+    if 'USD' in divisa or 'US$' in divisa or 'DÓLAR' in divisa:
         if valor > 200000:
             is_mcl = True
             tramo_str = "> 200.000 USD (MCL)"
@@ -86,6 +111,7 @@ def calcular_tramo_mcl(fila):
         else:
             is_mcl = True
             tramo_str = "> 5000 UF (MCL)"
+            
     return tramo_str, is_mcl
 
 def get_google_sheet():
@@ -109,15 +135,13 @@ def load_plan_semanal(ajustador):
     return [], filepath 
 
 def save_plan_actualizado(filepath, data):
-    # Guardado local híbrido (Mantiene el Gantt operativo)
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
         
-    # Motor de Sincronización Google Sheets (Opción A - Dormido hasta configurar Secrets)
     sheet = get_google_sheet()
     if sheet:
         try:
-            pass # Aquí irá la lógica de volcado directo a celdas en Fase 2
+            pass
         except: pass
 
 # ---------------------------------------------------------
