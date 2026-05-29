@@ -8,12 +8,20 @@ from datetime import datetime
 # ---------------------------------------------------------
 # BLOQUE 0: CONFIGURACIÓN GENERAL Y PERSISTENCIA
 # ---------------------------------------------------------
+import streamlit as st
+import pandas as pd
+import os
+import json
+import uuid
+from datetime import datetime
+import gspread
+from google.oauth2.service_account import Credentials
+
 st.set_page_config(page_title="JPV - OpsControl", layout="wide")
 
 PERSISTENCE_DIR = "persistence"
 
 def init_system():
-    # El parámetro exist_ok=True evita el choque en servidores web si la carpeta ya existe
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
 def get_week_identifier():
