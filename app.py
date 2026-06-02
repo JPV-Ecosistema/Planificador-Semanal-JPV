@@ -824,7 +824,7 @@ def vista_diario():
 
 # ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT EXCEL/WORD)
-# VERSIÓN: 3.2 (Restauración de Lectura Global y Filtro Semanal)
+# VERSIÓN: 3.3 (Sincronización Masiva y Filtro Semanal)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -841,7 +841,13 @@ def vista_reportes():
     st.title("📊 Carta Gantt de Planificación Semanal")
     st.markdown("Visión gerencial estructurada por Casos, Estados Proyectados y Entregables en la línea de tiempo.")
     
-    week_id_obj = st.radio("Seleccione la semana a reportar:", ["Semana Actual", "Próxima Semana"], horizontal=True)
+    col_radio, col_btn = st.columns([2, 1])
+    with col_radio:
+        week_id_obj = st.radio("Seleccione la semana a reportar:", ["Semana Actual", "Próxima Semana"], horizontal=True)
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
+
     offset = 0 if week_id_obj == "Semana Actual" else 1
     
     # --- CÁLCULO EXACTO DE LOS DÍAS DE LA SEMANA SELECCIONADA ---
@@ -850,11 +856,36 @@ def vista_reportes():
     lunes = target_date - timedelta(days=target_date.weekday())
     dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
     
-    # --- RESTAURACIÓN: LECTURA GLOBAL DE TODOS LOS ARCHIVOS (Tu lógica original) ---
+    # --- MOTOR DE SINCRONIZACIÓN MASIVA DESDE LA NUBE ---
+    # Se ejecuta si el jefe presiona el botón o si el servidor amaneció con la memoria vacía
+    archivos_existentes = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith('.json')]
+    
+    if forzar_sync or len(archivos_existentes) == 0:
+        with st.spinner("Descargando planes de todos los ajustadores desde Google Sheets..."):
+            sheet = get_google_sheet()
+            if sheet:
+                try:
+                    registros = sheet.get_all_records()
+                    for fila in registros:
+                        fname = str(fila.get('Archivo', ''))
+                        if fname.endswith('.json') and fname != "BASE_MAESTRA.json":
+                            fpath = os.path.join(PERSISTENCE_DIR, fname)
+                            try:
+                                datos_json = json.loads(fila.get('JSON_Data', '[]'))
+                                with open(fpath, 'w', encoding='utf-8') as f:
+                                    json.dump(datos_json, f, ensure_ascii=False, indent=4)
+                            except Exception:
+                                pass
+                    if forzar_sync:
+                        st.success("¡Sincronización completada! Todos los planes están actualizados.")
+                except Exception as e:
+                    st.warning(f"Error al sincronizar masivamente con la nube: {e}")
+    
+    # --- LECTURA GLOBAL DE TODOS LOS ARCHIVOS ---
     archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json') and f != "BASE_MAESTRA.json"]
     
     if not archivos_json:
-        st.warning("No hay planes registrados en el servidor en este momento.")
+        st.warning("No hay planes registrados en el servidor ni en la nube en este momento.")
         return
         
     df_maestro = load_master_base()
@@ -866,7 +897,6 @@ def vista_reportes():
 
     datos_consolidados = []
     for archivo in archivos_json:
-        # Lógica original para limpiar el nombre y no perder a nadie
         partes_nombre = archivo.replace('plan_mensual_mcl_', '').replace('plan_', '').replace('.json', '').split('_20')
         nombre_ajustador = partes_nombre[0].replace('_', ' ')
         
@@ -891,11 +921,11 @@ def vista_reportes():
         if not df_operativa.empty:
             df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso'], errors='coerce').dt.date
             
-            # --- FILTRO MAESTRO: SOLO MOSTRAR TAREAS QUE CAEN EN LA SEMANA SELECCIONADA ---
+            # --- FILTRO MAESTRO: SOLO MOSTRAR TAREAS DE LA SEMANA SELECCIONADA ---
             df_operativa = df_operativa[df_operativa['fecha_compromiso'].isin(dias_semana_target)]
             
             if df_operativa.empty:
-                st.info(f"No hay tareas operativas planificadas para las fechas de la {week_id_obj} ({dias_semana_target[0].strftime('%d/%m')} al {dias_semana_target[-1].strftime('%d/%m')}).")
+                st.info(f"Los ajustadores han guardado planes, pero ninguno contiene tareas operativas para las fechas entre el {dias_semana_target[0].strftime('%d/%m')} y el {dias_semana_target[-1].strftime('%d/%m')}.")
                 return
 
             if 'estado_proyectado' not in df_operativa.columns:
@@ -917,12 +947,12 @@ def vista_reportes():
             st.subheader("🛠️ Gantt Operativo (Vista Previa)")
             st.dataframe(df_gantt_visual, use_container_width=True)
 
-            # --- EXCEL NATIVO (RESTAURADO Y MEJORADO) ---
+            # --- EXCEL NATIVO ---
             wb = Workbook()
             ws = wb.active
             ws.title = "Plan Semanal Gantt"
             
-            fechas_unicas = dias_semana_target # Usamos los 7 días fijos
+            fechas_unicas = dias_semana_target 
             headers_excel = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"] + [f.strftime('%A %d-%m') for f in fechas_unicas] + ["Hon UF"]
             ws.append(headers_excel)
             
@@ -1037,7 +1067,7 @@ def vista_reportes():
             word_buffer = io.BytesIO()
             doc.save(word_buffer)
 
-            # --- BOTONES DE DESCARGA (Intactos) ---
+            # --- BOTONES DE DESCARGA ---
             st.markdown("---")
             st.markdown("### Opciones de Exportación Corporativa")
             col1, col2, col3 = st.columns(3)
