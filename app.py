@@ -824,7 +824,7 @@ def vista_diario():
 
 # ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (CARTA GANTT EXCEL/WORD)
-# VERSIÓN: 3.1 (Integración Excel Original + Word Gantt Horizontal Cascada)
+# VERSIÓN: 3.2 (Restauración de Lectura Global y Filtro Semanal)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -836,22 +836,27 @@ def vista_reportes():
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
+    from datetime import timedelta
     
     st.title("📊 Carta Gantt de Planificación Semanal")
     st.markdown("Visión gerencial estructurada por Casos, Estados Proyectados y Entregables en la línea de tiempo.")
     
-    # Selector para aislar los planes por semana
     week_id_obj = st.radio("Seleccione la semana a reportar:", ["Semana Actual", "Próxima Semana"], horizontal=True)
     offset = 0 if week_id_obj == "Semana Actual" else 1
-    target_week_id = get_week_identifier(offset)
     
-    archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith(f'_{target_week_id}.json')]
+    # --- CÁLCULO EXACTO DE LOS DÍAS DE LA SEMANA SELECCIONADA ---
+    hoy = datetime.now()
+    target_date = hoy + timedelta(weeks=offset)
+    lunes = target_date - timedelta(days=target_date.weekday())
+    dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
+    
+    # --- RESTAURACIÓN: LECTURA GLOBAL DE TODOS LOS ARCHIVOS (Tu lógica original) ---
+    archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json') and f != "BASE_MAESTRA.json"]
     
     if not archivos_json:
-        st.warning(f"No hay planes registrados en el servidor para la {week_id_obj}.")
+        st.warning("No hay planes registrados en el servidor en este momento.")
         return
         
-    # Extraer diccionario de Nicknames desde la Base Maestra
     df_maestro = load_master_base()
     diccionario_nicknames = {}
     if df_maestro is not None and 'Número de caso' in df_maestro.columns and 'Nickname' in df_maestro.columns:
@@ -861,7 +866,8 @@ def vista_reportes():
 
     datos_consolidados = []
     for archivo in archivos_json:
-        partes_nombre = archivo.replace('plan_', '').split(f'_{target_week_id}')
+        # Lógica original para limpiar el nombre y no perder a nadie
+        partes_nombre = archivo.replace('plan_mensual_mcl_', '').replace('plan_', '').replace('.json', '').split('_20')
         nombre_ajustador = partes_nombre[0].replace('_', ' ')
         
         filepath = os.path.join(PERSISTENCE_DIR, archivo)
@@ -870,18 +876,28 @@ def vista_reportes():
                 plan = json.load(f)
                 for tarea in plan:
                     tarea['Ajustador'] = nombre_ajustador
-                    tarea['Nick Name'] = diccionario_nicknames.get(tarea.get('numero_caso', ''), '')
+                    tarea['Nick Name'] = diccionario_nicknames.get(str(tarea.get('numero_caso', '')), '')
                     datos_consolidados.append(tarea)
         except Exception:
             pass
 
     if datos_consolidados:
         df_raw = pd.DataFrame(datos_consolidados)
-        df_operativa = df_raw[df_raw['categoria'] == 'Operativa'].copy()
+        if 'categoria' in df_raw.columns:
+            df_operativa = df_raw[df_raw['categoria'] == 'Operativa'].copy()
+        else:
+            df_operativa = df_raw.copy()
         
         if not df_operativa.empty:
-            df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso']).dt.date
+            df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso'], errors='coerce').dt.date
             
+            # --- FILTRO MAESTRO: SOLO MOSTRAR TAREAS QUE CAEN EN LA SEMANA SELECCIONADA ---
+            df_operativa = df_operativa[df_operativa['fecha_compromiso'].isin(dias_semana_target)]
+            
+            if df_operativa.empty:
+                st.info(f"No hay tareas operativas planificadas para las fechas de la {week_id_obj} ({dias_semana_target[0].strftime('%d/%m')} al {dias_semana_target[-1].strftime('%d/%m')}).")
+                return
+
             if 'estado_proyectado' not in df_operativa.columns:
                 df_operativa['estado_proyectado'] = 'N/D'
             if 'subestado_proyectado' not in df_operativa.columns:
@@ -889,7 +905,6 @@ def vista_reportes():
             if 'honorarios_estimados' not in df_operativa.columns:
                 df_operativa['honorarios_estimados'] = 0.0
 
-            # Orden cronológico para garantizar el efecto cascada
             df_operativa = df_operativa.sort_values(by=['Ajustador', 'fecha_compromiso'])
 
             df_gantt_visual = df_operativa.pivot_table(
@@ -902,16 +917,15 @@ def vista_reportes():
             st.subheader("🛠️ Gantt Operativo (Vista Previa)")
             st.dataframe(df_gantt_visual, use_container_width=True)
 
-            # --- GENERADOR DE EXCEL NATIVO CORPORATIVO (MANTENIDO Y MEJORADO) ---
+            # --- EXCEL NATIVO (RESTAURADO Y MEJORADO) ---
             wb = Workbook()
             ws = wb.active
             ws.title = "Plan Semanal Gantt"
             
-            fechas_unicas = sorted(df_operativa['fecha_compromiso'].unique())
+            fechas_unicas = dias_semana_target # Usamos los 7 días fijos
             headers_excel = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"] + [f.strftime('%A %d-%m') for f in fechas_unicas] + ["Hon UF"]
             ws.append(headers_excel)
             
-            # Agrupación para Excel (Mantiene las cruces X dinámicas)
             grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
             for name, group in grouped:
                 ajustador, caso, nickname, asegurado, accion = name
@@ -952,10 +966,8 @@ def vista_reportes():
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             
-            # --- GENERADOR DE WORD NATIVO CORPORATIVO (HORIZONTAL Y EN CASCADA) ---
+            # --- WORD NATIVO (HORIZONTAL, CASCADA Y HONORARIOS) ---
             doc = Document()
-            
-            # Forzar documento a Horizontal (Landscape)
             section = doc.sections[-1]
             new_width, new_height = section.page_height, section.page_width
             section.orientation = WD_ORIENT.LANDSCAPE
@@ -969,7 +981,6 @@ def vista_reportes():
             doc.add_heading(f'Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
             doc.add_paragraph('Visión gerencial estructurada por Casos, Tareas y Entregables en la línea de tiempo.')
             
-            # Nuevas cabeceras fijas para Word
             headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "S", "D", "Hon UF"]
             table = doc.add_table(rows=1, cols=len(headers_word))
             table.style = 'Table Grid'
@@ -987,11 +998,9 @@ def vista_reportes():
                 
             ajustador_previo = ""
             
-            # Recorrido fila por fila para mantener la cascada cronológica
             for _, row_data in df_operativa.iterrows():
                 row_cells = table.add_row().cells
                 
-                # Agrupación visual (Subtareas)
                 ajustador_actual = str(row_data['Ajustador'])
                 if ajustador_actual == ajustador_previo:
                     row_cells[0].text = ""
@@ -1004,23 +1013,20 @@ def vista_reportes():
                 row_cells[3].text = str(row_data['asegurado'])
                 row_cells[4].text = str(row_data['accion'])
                 
-                # Motor Gantt de días fijos
                 try:
-                    dia_idx = pd.to_datetime(row_data['fecha_compromiso']).weekday() # 0 = Lunes, 6 = Domingo
+                    dia_idx = pd.to_datetime(row_data['fecha_compromiso']).weekday()
                     col_idx = 5 + dia_idx
                     shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
                     row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
                 except:
                     pass
                 
-                # Valorización
                 try:
                     uf_val = float(row_data['honorarios_estimados'])
                     row_cells[12].text = f"{uf_val:,.2f}" if uf_val > 0 else "-"
                 except:
                     row_cells[12].text = "-"
 
-                # Ajuste de fuente para asegurar legibilidad en horizontal
                 for i, cell in enumerate(row_cells):
                     for paragraph in cell.paragraphs:
                         for run in paragraph.runs:
@@ -1031,11 +1037,12 @@ def vista_reportes():
             word_buffer = io.BytesIO()
             doc.save(word_buffer)
 
-            # --- BOTONES DE DESCARGA ---
+            # --- BOTONES DE DESCARGA (Intactos) ---
             st.markdown("---")
             st.markdown("### Opciones de Exportación Corporativa")
             col1, col2, col3 = st.columns(3)
             
+            target_week_id = get_week_identifier(offset)
             with col1:
                 st.download_button(
                     label="📥 DESCARGAR GANTT (EXCEL)",
@@ -1060,7 +1067,6 @@ def vista_reportes():
                 )
         else:
             st.info("No hay tareas operativas (casos) planificadas aún para esta semana.")
-
 
 # ---------------------------------------------------------
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
