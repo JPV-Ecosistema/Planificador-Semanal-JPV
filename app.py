@@ -625,15 +625,38 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
-# VERSIÓN: 2.2 (Selector Automático y Visor de Honorarios)
+# VERSIÓN: 2.3 (Sincronización Automática de Menú Desplegable)
 # ---------------------------------------------------------
 def vista_diario():
     st.title("☀️ Ejecución y Cumplimiento")
     hoy_str = datetime.now().strftime("%Y-%m-%d")
     st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
     
-    # --- MOTOR DE BÚSQUEDA AUTOMÁTICA DE AJUSTADORES ---
     week_id = get_week_identifier()
+    
+    # --- MOTOR DE SINCRONIZACIÓN AUTOMÁTICA (Rescate de Nube) ---
+    # Si la memoria local amaneció vacía, rescatamos todo desde Google Sheets antes de armar el menú
+    archivos_locales = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith('.json')]
+    if not archivos_locales:
+        with st.spinner("Sincronizando planes desde la nube corporativa..."):
+            sheet = get_google_sheet()
+            if sheet:
+                try:
+                    registros = sheet.get_all_records()
+                    for fila in registros:
+                        fname = str(fila.get('Archivo', ''))
+                        if fname.endswith('.json') and fname != "BASE_MAESTRA.json":
+                            fpath = os.path.join(PERSISTENCE_DIR, fname)
+                            try:
+                                datos_json = json.loads(fila.get('JSON_Data', '[]'))
+                                with open(fpath, 'w', encoding='utf-8') as f:
+                                    json.dump(datos_json, f, ensure_ascii=False, indent=4)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+    # --- MOTOR DE BÚSQUEDA AUTOMÁTICA DE AJUSTADORES ---
     try:
         archivos = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith(f'_{week_id}.json')]
         ajustadores_con_plan = []
@@ -810,10 +833,10 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
-                        st.success("¡Base de datos local actualizada y respaldada!")
+                        st.success("¡Base de datos local actualizada y respaldada en la nube!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error al escribir en el disco: {e}")
+                        st.error(f"Error al escribir en el disco/nube: {e}")
                 else:
                     st.info("No se detectaron cambios.")
             
