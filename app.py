@@ -855,7 +855,7 @@ def vista_diario():
 
 # ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
-# VERSIÓN: 4.2 (Word Gráfico, Tab Operacional, MCL y Control de Decimales)
+# VERSIÓN: 4.3 (Semáforos, Tab Operacional Completo y Word Detallado)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -958,6 +958,38 @@ def vista_reportes():
             if 'tramo_uf' not in df_week.columns:
                 df_week['tramo_uf'] = 'N/D'
 
+    # Funciones auxiliares de diseño y estilo
+    def obtener_color_kpi(valor):
+        if valor <= 50: return "#d9534f" # Rojo
+        elif valor < 80: return "#f0ad4e" # Amarillo
+        else: return "#28a745" # Verde
+
+    def generar_kpi_html(titulo, valor, subtitulo, inverso=False):
+        # Si es inverso (ej. Urgencias), rojo es alto, verde es bajo
+        if inverso:
+            if valor <= 20: color = "#28a745"
+            elif valor <= 40: color = "#f0ad4e"
+            else: color = "#d9534f"
+        else:
+            color = obtener_color_kpi(valor)
+            
+        return f"""
+        <div style="border: 2px solid {color}; border-radius: 8px; padding: 15px; text-align: center; background-color: #f8f9fa;">
+            <h2 style="color: {color}; margin: 0; font-size: 2.2em; font-weight: 800;">{valor:.1f}%</h2>
+            <p style="margin: 5px 0 0 0; font-weight: bold; color: #333;">{titulo}</p>
+            <p style="margin: 0; font-size: 0.8em; color: gray;">{subtitulo}</p>
+        </div>
+        """
+
+    def formatear_cabecera_tabla(table, bg_color="003366"):
+        hdr_cells = table.rows[0].cells
+        for cell in hdr_cells:
+            run = cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(cell.text)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), bg_color))
+            cell._tc.get_or_add_tcPr().append(shading_elm)
+
     # ---------------------------------------------------------
     # ARQUITECTURA DE PESTAÑAS (3 TABS)
     # ---------------------------------------------------------
@@ -983,7 +1015,7 @@ def vista_reportes():
             c_fin2.metric("Valor Potencial Traccionado (WIP / Proceso)", f"{uf_traccionadas_wip:,.2f} UF", delta="Esfuerzo Operativo", delta_color="off")
             st.markdown("---")
             
-            # --- 2. KPIS DE CUMPLIMIENTO ---
+            # --- 2. KPIS DE CUMPLIMIENTO CON SEMÁFOROS ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #17a2b8;"><h4>⏱️ Cuadrante 2: Métricas de Cumplimiento y Carga Operativa</h4></div>', unsafe_allow_html=True)
             t_planificadas = len(df_week[df_week['tipo_actividad'] == 'Programada'])
             t_planificadas_hechas = len(df_realizados[df_realizados['tipo_actividad'] == 'Programada'])
@@ -995,9 +1027,9 @@ def vista_reportes():
             ratio_urg = (t_urgencias / total_esfuerzo * 100) if total_esfuerzo > 0 else 0
             
             c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-            c_kpi1.metric("Adherencia al Plan", f"{adherencia:.1f}%", f"{t_planificadas_hechas} de {t_planificadas} Tareas Originales")
-            c_kpi2.metric("Ratio de Esfuerzo Planificado", f"{ratio_plan:.1f}%", "Trabajo Proactivo", delta_color="normal")
-            c_kpi3.metric("Fricción (No Programado/Urgencias)", f"{ratio_urg:.1f}%", f"{t_urgencias} Actividades Reactivas", delta_color="inverse")
+            with c_kpi1: st.markdown(generar_kpi_html("Adherencia al Plan", adherencia, f"{t_planificadas_hechas} de {t_planificadas} tareas"), unsafe_allow_html=True)
+            with c_kpi2: st.markdown(generar_kpi_html("Ratio Planificado", ratio_plan, "Trabajo Proactivo"), unsafe_allow_html=True)
+            with c_kpi3: st.markdown(generar_kpi_html("Fricción / Urgencias", ratio_urg, f"{t_urgencias} Reactivas", inverso=True), unsafe_allow_html=True)
             st.markdown("---")
             
             # --- SECCIÓN ESPECIAL MCL ---
@@ -1005,6 +1037,8 @@ def vista_reportes():
             cond_mcl = df_realizados['tramo_uf'].str.contains('MCL|> 5', case=False, na=False)
             df_mcl = df_realizados[cond_mcl][['Ajustador', 'numero_caso', 'asegurado', 'accion', 'honorarios_estimados']].copy()
             if not df_mcl.empty:
+                df_mcl['accion'] = df_mcl['accion'].str.replace('Preparar Informe - ', '', regex=False)
+                df_mcl['accion'] = df_mcl['accion'].str.replace('Reunión - ', '', regex=False)
                 df_mcl['honorarios_estimados'] = df_mcl['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
                 st.dataframe(df_mcl.rename(columns={'numero_caso': 'Caso', 'asegurado': 'Asegurado', 'accion': 'Gestión MCL', 'honorarios_estimados': 'Hon UF'}), use_container_width=True, hide_index=True)
             else:
@@ -1026,138 +1060,47 @@ def vista_reportes():
                 st.info("Aún no se han ejecutado entregables de valor (Informes o Presentaciones) esta semana.")
             st.markdown("---")
             
-            # --- 4. GESTIÓN ESTRATÉGICA ---
+            # --- 4. GESTIÓN ESTRATÉGICA DESTACADA ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #ffc107;"><h4>🤝 Cuadrante 4: Gestión Estratégica Transversal</h4></div>', unsafe_allow_html=True)
+            
+            # Limpieza de nulos o ceros en comerciales/admin
+            df_com = df_realizados[(df_realizados['categoria'] == 'Gestión Comercial') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))][['Ajustador', 'accion']]
+            df_adm = df_realizados[(df_realizados['categoria'] == 'Gestión Administrativa') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))][['Ajustador', 'accion']]
+            
             col_com, col_adm = st.columns(2)
             with col_com:
-                st.markdown("**Gestiones Comerciales:**")
-                df_com = df_realizados[df_realizados['categoria'] == 'Gestión Comercial'][['Ajustador', 'accion']]
+                st.markdown(f"<h5 style='color:#004a99;'>Gestiones Comerciales ({len(df_com)})</h5>", unsafe_allow_html=True)
                 if not df_com.empty:
-                    st.dataframe(df_com.rename(columns={'accion': 'Detalle'}), use_container_width=True, hide_index=True)
+                    st.dataframe(df_com.rename(columns={'accion': 'Detalle / Reuniones'}), use_container_width=True, hide_index=True)
                 else:
-                    st.caption("Sin gestiones comerciales cerradas.")
+                    st.caption("Sin gestiones comerciales válidas reportadas.")
             with col_adm:
-                st.markdown("**Gestiones Administrativas:**")
-                df_adm = df_realizados[df_realizados['categoria'] == 'Gestión Administrativa'][['Ajustador', 'accion']]
+                st.markdown(f"<h5 style='color:#6c757d;'>Gestiones Administrativas ({len(df_adm)})</h5>", unsafe_allow_html=True)
                 if not df_adm.empty:
-                    st.dataframe(df_adm.rename(columns={'accion': 'Detalle'}), use_container_width=True, hide_index=True)
+                    st.dataframe(df_adm.rename(columns={'accion': 'Detalle / Comités'}), use_container_width=True, hide_index=True)
                 else:
-                    st.caption("Sin gestiones administrativas cerradas.")
-                    
-            # --- GENERADORES EXPORTACIÓN DASHBOARD (WORD GRÁFICO) ---
-            dash_wb = Workbook()
-            ws_resumen = dash_wb.active
-            ws_resumen.title = "Resumen Ejecutivo"
-            ws_resumen.append(["Métrica Financiera", "UF"])
-            ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", round(uf_facturables_caja, 2)])
-            ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", round(uf_traccionadas_wip, 2)])
-            ws_resumen.append([])
-            ws_resumen.append(["KPI Operativo", "Valor"])
-            ws_resumen.append(["Adherencia al Plan (%)", f"{adherencia:.1f}%"])
-            ws_resumen.append(["Ratio de Esfuerzo Planificado (%)", f"{ratio_plan:.1f}%"])
-            ws_resumen.append(["Fricción (Urgencias) (%)", f"{ratio_urg:.1f}%"])
-            excel_dash_buffer = io.BytesIO()
-            dash_wb.save(excel_dash_buffer)
-            
-            # Funciones de estilo para Word
-            def formatear_cabecera_tabla(table, bg_color="003366"):
-                hdr_cells = table.rows[0].cells
-                for cell in hdr_cells:
-                    run = cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(cell.text)
-                    run.font.bold = True
-                    run.font.color.rgb = RGBColor(255, 255, 255)
-                    shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), bg_color))
-                    cell._tc.get_or_add_tcPr().append(shading_elm)
-
-            dash_doc = Document()
-            dash_doc.add_heading(f'Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
-            
-            # Tabla Financiera
-            dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=2)
-            t_fin = dash_doc.add_table(rows=2, cols=2)
-            t_fin.style = 'Table Grid'
-            t_fin.rows[0].cells[0].text, t_fin.rows[0].cells[1].text = "Métrica Financiera", "Valor (UF)"
-            formatear_cabecera_tabla(t_fin)
-            t_fin.rows[1].cells[0].text = "Ingreso Efectivo Facturable (Cierres/Rechazos)"
-            t_fin.rows[1].cells[1].text = f"{uf_facturables_caja:,.2f}"
-            t_fin.add_row().cells[0].text = "Valor Potencial Traccionado (WIP / Proceso)"
-            t_fin.rows[2].cells[1].text = f"{uf_traccionadas_wip:,.2f}"
-            dash_doc.add_paragraph("")
-            
-            # Tabla KPIs
-            dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=2)
-            t_kpi = dash_doc.add_table(rows=2, cols=3)
-            t_kpi.style = 'Table Grid'
-            t_kpi.rows[0].cells[0].text, t_kpi.rows[0].cells[1].text, t_kpi.rows[0].cells[2].text = "Adherencia al Plan", "Ratio Planificado", "Fricción (Urgencias)"
-            formatear_cabecera_tabla(t_kpi, "17A2B8")
-            t_kpi.rows[1].cells[0].text = f"{adherencia:.1f}%"
-            t_kpi.rows[1].cells[1].text = f"{ratio_plan:.1f}%"
-            t_kpi.rows[1].cells[2].text = f"{ratio_urg:.1f}%"
-            dash_doc.add_paragraph("")
-
-            # Tabla MCL
-            if not df_mcl.empty:
-                dash_doc.add_heading('Radar de Casos MCL', level=2)
-                t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl.columns))
-                t_mcl.style = 'Table Grid'
-                for i, col_name in enumerate(["Ajustador", "Caso", "Asegurado", "Gestión MCL", "Hon UF"]):
-                    t_mcl.rows[0].cells[i].text = col_name
-                formatear_cabecera_tabla(t_mcl, "D9534F")
-                for row_val in df_mcl.values.tolist():
-                    row_cells = t_mcl.add_row().cells
-                    for i, val in enumerate(row_val):
-                        row_cells[i].text = str(val)
-                dash_doc.add_paragraph("")
-            
-            # Tabla Entregables
-            if not df_entregables.empty:
-                dash_doc.add_heading('3. Inventario de Producción (Entregables)', level=2)
-                t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
-                t_ent.style = 'Table Grid'
-                for i, col_name in enumerate(df_mostrar.columns):
-                    t_ent.rows[0].cells[i].text = str(col_name)
-                formatear_cabecera_tabla(t_ent, "28A745")
-                for row_val in df_mostrar.values.tolist():
-                    row_cells = t_ent.add_row().cells
-                    for i, val in enumerate(row_val):
-                        row_cells[i].text = str(val)
-                dash_doc.add_paragraph("")
-                
-            # Tablas Comerciales y Admin
-            dash_doc.add_heading('4. Gestión Estratégica Transversal', level=2)
-            if not df_com.empty:
-                dash_doc.add_paragraph("Gestiones Comerciales:", style='List Bullet')
-                for _, row in df_com.iterrows():
-                    dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
-            if not df_adm.empty:
-                dash_doc.add_paragraph("Gestiones Administrativas:", style='List Bullet')
-                for _, row in df_adm.iterrows():
-                    dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
-
-            word_dash_buffer = io.BytesIO()
-            dash_doc.save(word_dash_buffer)
-            
-            st.markdown("### Exportar Resumen Ejecutivo")
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                st.download_button("📥 DESCARGAR DASHBOARD (EXCEL)", data=excel_dash_buffer.getvalue(), file_name=f"Dashboard_Ejecutivo_{target_week_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            with col_d2:
-                st.download_button("📥 DESCARGAR DASHBOARD (WORD)", data=word_dash_buffer.getvalue(), file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    st.caption("Sin gestiones administrativas válidas reportadas.")
 
     # =========================================================
     # PESTAÑA 2: REPORTE OPERACIONAL DE EQUIPO (DETALLE INTERNO)
     # =========================================================
     with tab_operacional:
         st.markdown("### 📋 Radiografía Operacional por Ajustador")
-        st.markdown("Análisis individual para reuniones de seguimiento y evaluación de carga de trabajo.")
+        st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Urgencias y Gestión.")
+        
+        op_doc = Document()
+        op_doc.add_heading(f'Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
         
         if not ajustadores_validos:
             st.warning("No se pudo cargar la lista de ajustadores desde la Base Maestra.")
         else:
             for ajustador in ajustadores_validos:
+                op_doc.add_heading(f"Ajustador: {ajustador}", level=1)
+                
                 if df_week.empty:
-                    st.markdown(f"#### {ajustador}")
-                    st.markdown("<h5 style='color:#d9534f;'>🚨 AJUSTADOR SIN PLAN</h5>", unsafe_allow_html=True)
+                    st.markdown(f"#### 👤 {ajustador}")
+                    st.markdown("<h5 style='color:#fff; background-color:#d9534f; padding:10px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN REPORTADO</h5>", unsafe_allow_html=True)
+                    op_doc.add_paragraph("🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA", style='Intense Quote')
                     st.markdown("---")
                     continue
                 
@@ -1165,9 +1108,17 @@ def vista_reportes():
                 st.markdown(f"#### 👤 {ajustador}")
                 
                 if df_aj.empty:
-                    st.markdown("<h5 style='color:#d9534f; background-color:#f9dede; padding:10px; border-radius:5px;'>🚨 AJUSTADOR SIN PLAN ESTA SEMANA</h5>", unsafe_allow_html=True)
+                    st.markdown("<h5 style='color:#fff; background-color:#d9534f; padding:10px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN ESTA SEMANA</h5>", unsafe_allow_html=True)
+                    op_doc.add_paragraph("🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA", style='Intense Quote')
                 else:
                     df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
+                    
+                    # 1. Finanzas del Ajustador
+                    cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
+                    uf_caja_aj = df_aj_realizado[cond_fac_aj]['honorarios_estimados'].sum()
+                    uf_wip_aj = df_aj_realizado[(df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)]['honorarios_estimados'].sum()
+                    
+                    # 2. KPIs del Ajustador
                     t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
                     t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
                     t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'])
@@ -1177,25 +1128,51 @@ def vista_reportes():
                     rat_prog = (t_prog_hechas / total_aj * 100) if total_aj > 0 else 0
                     rat_np = (t_np / total_aj * 100) if total_aj > 0 else 0
                     
-                    c_op1, c_op2, c_op3 = st.columns(3)
-                    c_op1.metric("Cumplimiento del Plan", f"{adh_aj:.0f}%", f"{t_prog_hechas}/{t_prog} tareas")
-                    c_op2.metric("Trabajo Programado", f"{rat_prog:.0f}%", "Proactivo")
-                    c_op3.metric("Trabajo No Programado", f"{rat_np:.0f}%", "Urgencias/Reactivas", delta_color="inverse")
+                    # Render UI
+                    colA, colB = st.columns(2)
+                    colA.metric("Facturación Lograda (UF)", f"{uf_caja_aj:,.2f}")
+                    colB.metric("Esfuerzo en Proceso (UF)", f"{uf_wip_aj:,.2f}")
                     
-                    with st.expander(f"Ver desglose detallado de {ajustador}"):
+                    c_op1, c_op2, c_op3 = st.columns(3)
+                    with c_op1: st.markdown(generar_kpi_html("Adherencia", adh_aj, f"{t_prog_hechas}/{t_prog} planificadas"), unsafe_allow_html=True)
+                    with c_op2: st.markdown(generar_kpi_html("Proactivo", rat_prog, "Trabajo Programado"), unsafe_allow_html=True)
+                    with c_op3: st.markdown(generar_kpi_html("Reactivas", rat_np, f"{t_np} Urgencias", inverso=True), unsafe_allow_html=True)
+                    
+                    # Render Word Report
+                    op_doc.add_paragraph(f"Finanzas: {uf_caja_aj:,.2f} UF a Caja | {uf_wip_aj:,.2f} UF en Proceso (WIP)")
+                    op_doc.add_paragraph(f"Cumplimiento: Adherencia {adh_aj:.1f}% | Trabajo Proactivo {rat_prog:.1f}% | Urgencias {rat_np:.1f}%")
+                    
+                    with st.expander(f"Ver desglose operativo detallado"):
                         if t_np > 0:
                             st.markdown("**🔴 Detalle de Carga No Programada (Urgencias):**")
                             df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
                             st.dataframe(df_np_view, use_container_width=True, hide_index=True)
-                        else:
-                            st.caption("No registró actividades fuera de programa.")
                             
-                        # Admin y Comercial
-                        cond_estr = df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])
-                        if cond_estr.any():
+                            op_doc.add_heading('Urgencias Reportadas:', level=3)
+                            t_ur = op_doc.add_table(rows=1, cols=4)
+                            t_ur.style = 'Table Grid'
+                            for i, col in enumerate(df_np_view.columns): t_ur.rows[0].cells[i].text = str(col).capitalize()
+                            formatear_cabecera_tabla(t_ur, "D9534F")
+                            for r_v in df_np_view.values.tolist():
+                                r_c = t_ur.add_row().cells
+                                for i, v in enumerate(r_v): r_c[i].text = str(v)
+                        
+                        df_estr = df_aj_realizado[(df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])) & (~df_aj_realizado['accion'].isin(['0', ' ', '', 0]))]
+                        if not df_estr.empty:
                             st.markdown("**🔵 Gestiones Comerciales y Administrativas:**")
-                            st.dataframe(df_aj_realizado[cond_estr][['categoria', 'accion']], use_container_width=True, hide_index=True)
+                            st.dataframe(df_estr[['categoria', 'accion']], use_container_width=True, hide_index=True)
+                            
+                            op_doc.add_heading('Gestión Estratégica:', level=3)
+                            for _, r in df_estr.iterrows():
+                                op_doc.add_paragraph(f"[{r['categoria']}] {r['accion']}", style='List Bullet')
+                                
+                    op_doc.add_paragraph("")
                 st.markdown("---")
+                
+        # Exportación del Documento Operacional
+        word_op_buffer = io.BytesIO()
+        op_doc.save(word_op_buffer)
+        st.download_button("📥 DESCARGAR REPORTE OPERACIONAL (WORD)", data=word_op_buffer.getvalue(), file_name=f"Reporte_Operacional_{target_week_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary", use_container_width=True)
 
     # =========================================================
     # PESTAÑA 3: CARTA GANTT Y EXPORTACIÓN CORPORATIVA
