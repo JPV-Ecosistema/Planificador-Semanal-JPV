@@ -625,7 +625,7 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
-# VERSIÓN: 2.3 (Sincronización Automática de Menú Desplegable)
+# VERSIÓN: 2.4 (Sincronización Automática e Ingreso Múltiple No Programadas)
 # ---------------------------------------------------------
 def vista_diario():
     st.title("☀️ Ejecución y Cumplimiento")
@@ -635,7 +635,6 @@ def vista_diario():
     week_id = get_week_identifier()
     
     # --- MOTOR DE SINCRONIZACIÓN AUTOMÁTICA (Rescate de Nube) ---
-    # Si la memoria local amaneció vacía, rescatamos todo desde Google Sheets antes de armar el menú
     archivos_locales = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith('.json')]
     if not archivos_locales:
         with st.spinner("Sincronizando planes desde la nube corporativa..."):
@@ -676,21 +675,29 @@ def vista_diario():
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
         
-        # Módulo de Actividades No Programadas (Urgencias)
+        # --- MÓDULO DE ACTIVIDADES NO PROGRAMADAS (INGRESO MÚLTIPLE) ---
         st.markdown("---")
-        with st.expander("➕ REGISTRAR ACTIVIDAD NO PROGRAMADA (Urgencias / Fuera de Plan)", expanded=False):
+        with st.expander("➕ REGISTRAR ACTIVIDADES NO PROGRAMADAS (Urgencias / Fuera de Plan)", expanded=False):
             st.info("Utilice este módulo para reportar gestiones inmediatas que no estaban en su planificación original. Estas impactan positivamente en su métrica de cumplimiento global.")
-            colNP1, colNP2 = st.columns(2)
-            with colNP1:
-                np_caso = st.text_input("Número de Caso (o Referencia):", key="np_caso")
-                np_asegurado = st.text_input("Asegurado:", key="np_aseg")
-            with colNP2:
-                np_accion = st.text_input("Acción Ejecutada:", key="np_acc")
-                np_fecha = st.date_input("Fecha de Ejecución:", key="np_fec")
             
-            if st.button("Guardar Actividad No Programada"):
-                if np_caso and np_accion:
-                    nueva_actividad = {
+            num_np = st.number_input("Cantidad de urgencias a registrar ahora:", min_value=1, max_value=15, value=1, key="num_np_diario")
+            
+            nuevas_actividades = []
+            
+            for i in range(1, int(num_np) + 1):
+                st.markdown(f"**Urgencia {i}**")
+                colNP1, colNP2 = st.columns(2)
+                with colNP1:
+                    np_caso = st.text_input(f"Número de Caso (o Ref) {i}:", key=f"np_caso_{i}")
+                    np_asegurado = st.text_input(f"Asegurado {i}:", key=f"np_aseg_{i}")
+                with colNP2:
+                    np_accion = st.text_input(f"Acción Ejecutada {i}:", key=f"np_acc_{i}")
+                    # Por defecto sugiere la fecha de hoy, pero permite cambiarla si la urgencia fue ayer
+                    np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=datetime.now(), key=f"np_fec_{i}")
+                
+                # Solo preparamos el registro si llenaron los datos mínimos clave
+                if np_caso.strip() and np_accion.strip():
+                    nuevas_actividades.append({
                         "id_transaccion": str(uuid.uuid4()),
                         "tipo_plan": "Diario",
                         "tipo_actividad": "No Programada",
@@ -698,7 +705,7 @@ def vista_diario():
                         "numero_caso": str(np_caso),
                         "asegurado": str(np_asegurado),
                         "tramo_uf": "N/D",
-                        "honorarios_estimados": 0.0, # Las no programadas no traccionan UF automáticas por ahora
+                        "honorarios_estimados": 0.0, 
                         "estado_proyectado": "N/D",
                         "subestado_proyectado": "N/D",
                         "accion": np_accion,
@@ -706,13 +713,17 @@ def vista_diario():
                         "estado_cumplimiento": "Realizado", 
                         "fecha_ejecucion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    plan_data.append(nueva_actividad)
+                    })
+                st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
+            
+            if st.button("💾 Guardar Actividades No Programadas"):
+                if len(nuevas_actividades) > 0:
+                    plan_data.extend(nuevas_actividades)
                     save_plan_actualizado(filepath, plan_data)
-                    st.success("Actividad no programada incorporada al reporte general exitosamente.")
+                    st.success(f"¡{len(nuevas_actividades)} actividades no programadas incorporadas al reporte general exitosamente!")
                     st.rerun()
                 else:
-                    st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada.")
+                    st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada en alguna de las filas para poder guardar.")
 
         if not plan_data:
             st.warning(f"⚠️ No se encontraron compromisos agendados para **{ajustador_input}** en la semana en curso.")
@@ -732,7 +743,6 @@ def vista_diario():
                 tarea_con_indice = tarea.copy()
                 tarea_con_indice['_posicion_original'] = idx
                 
-                # Rescate seguro del valor UF
                 try:
                     uf_tarea = float(tarea.get("honorarios_estimados", 0.0))
                 except:
@@ -740,12 +750,10 @@ def vista_diario():
                     
                 es_realizado = (tarea.get("estado_cumplimiento") == "Realizado")
                 
-                # Sumatorias Totales
                 uf_proyectadas_semana += uf_tarea
                 if es_realizado:
                     uf_ejecutadas_semana += uf_tarea
                 
-                # Separación por fecha
                 if tarea.get("fecha_compromiso") == hoy_str:
                     tareas_hoy.append(tarea_con_indice)
                     uf_proyectadas_hoy += uf_tarea
@@ -833,7 +841,7 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
-                        st.success("¡Base de datos local actualizada y respaldada en la nube!")
+                        st.success("¡Base de datos local actualizada y respaldada en la nube corporativa!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al escribir en el disco/nube: {e}")
