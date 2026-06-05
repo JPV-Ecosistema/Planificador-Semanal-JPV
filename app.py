@@ -854,8 +854,9 @@ def vista_diario():
             st.caption(f"Avance de cumplimiento global: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
+# ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (GANTT Y DASHBOARD EJECUTIVO)
-# VERSIÓN: 4.0 (Integración de BI, KPIs y Embudo Financiero)
+# VERSIÓN: 4.1 (Dashboard Ejecutivo Descargable y Nomenclatura)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -887,6 +888,7 @@ def vista_reportes():
     target_date = hoy + timedelta(weeks=offset)
     lunes = target_date - timedelta(days=target_date.weekday())
     dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
+    target_week_id = get_week_identifier(offset)
     
     # --- MOTOR DE SINCRONIZACIÓN MASIVA DESDE LA NUBE ---
     archivos_existentes = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith('.json')]
@@ -945,7 +947,6 @@ def vista_reportes():
     if datos_consolidados:
         df_raw = pd.DataFrame(datos_consolidados)
         
-        # Procesamiento base de fechas
         df_raw['fecha_filtro'] = pd.to_datetime(df_raw['fecha_compromiso'], errors='coerce').dt.date
         df_week = df_raw[df_raw['fecha_filtro'].isin(dias_semana_target)].copy()
         
@@ -953,7 +954,6 @@ def vista_reportes():
             st.info(f"Los ajustadores han guardado planes, pero ninguno contiene tareas para las fechas entre el {dias_semana_target[0].strftime('%d/%m')} y el {dias_semana_target[-1].strftime('%d/%m')}.")
             return
 
-        # Limpieza financiera general
         if 'honorarios_estimados' not in df_week.columns:
             df_week['honorarios_estimados'] = 0.0
         df_week['honorarios_estimados'] = pd.to_numeric(df_week['honorarios_estimados'], errors='coerce').fillna(0.0)
@@ -969,10 +969,9 @@ def vista_reportes():
         with tab_dashboard:
             df_realizados = df_week[df_week['estado_cumplimiento'] == 'Realizado'].copy()
             
-            # --- 1. RESUMEN EJECUTIVO FINANCIERO (Embudo de Valor) ---
-            st.markdown('<div class="marco-gestion" style="border-left: 5px solid #003366;"><h4>💰 Cuadrante 1: Reconocimiento Financiero Semanal</h4></div>', unsafe_allow_html=True)
+            # --- 1. RESUMEN EJECUTIVO FINANCIERO ---
+            st.markdown('<div class="marco-gestion" style="border-left: 5px solid #003366;"><h4>💰 Cuadrante 1: Valorización de Cartera y Facturación Proyectada</h4></div>', unsafe_allow_html=True)
             
-            # Condición estricta: IFL o Cartas de Rechazo
             cond_facturable = df_realizados['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
             
             uf_facturables_caja = df_realizados[cond_facturable]['honorarios_estimados'].sum()
@@ -985,7 +984,7 @@ def vista_reportes():
             st.markdown("---")
             
             # --- 2. KPIS DE CUMPLIMIENTO Y COMPORTAMIENTO ---
-            st.markdown('<div class="marco-gestion" style="border-left: 5px solid #17a2b8;"><h4>⏱️ Cuadrante 2: Salud Operativa del Equipo</h4></div>', unsafe_allow_html=True)
+            st.markdown('<div class="marco-gestion" style="border-left: 5px solid #17a2b8;"><h4>⏱️ Cuadrante 2: Métricas de Cumplimiento y Carga Operativa</h4></div>', unsafe_allow_html=True)
             
             t_planificadas = len(df_week[df_week['tipo_actividad'] == 'Programada'])
             t_planificadas_hechas = len(df_realizados[df_realizados['tipo_actividad'] == 'Programada'])
@@ -1003,21 +1002,25 @@ def vista_reportes():
             
             st.markdown("---")
             
-            # --- 3. INVENTARIO DE PRODUCCIÓN (Entregables Puros) ---
+            # --- 3. INVENTARIO DE PRODUCCIÓN (Limpieza de Sustantivos) ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #28a745;"><h4>🏭 Cuadrante 3: Inventario de Producción (Entregables de Valor)</h4></div>', unsafe_allow_html=True)
             
-            # Filtramos solo informes y presentaciones ejecutadas
             cond_entregables = df_realizados['accion'].str.contains('Preparar Informe|Presentación pptx|Presentacion on line', case=False, na=False)
-            df_entregables = df_realizados[cond_entregables][['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion', 'honorarios_estimados']]
+            df_entregables = df_realizados[cond_entregables][['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion', 'honorarios_estimados']].copy()
             
             if not df_entregables.empty:
-                st.dataframe(df_entregables.rename(columns={'numero_caso': 'Caso', 'asegurado': 'Asegurado', 'accion': 'Tipo de Entregable', 'honorarios_estimados': 'Hon UF'}), use_container_width=True, hide_index=True)
+                # Motor de limpieza de verbos para entregar sustantivos puros
+                df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
+                df_entregables['accion'] = df_entregables['accion'].str.replace('Reunión - ', '', regex=False)
+                
+                df_mostrar = df_entregables.rename(columns={'numero_caso': 'Caso', 'asegurado': 'Asegurado', 'accion': 'Tipo de Entregable', 'honorarios_estimados': 'Hon UF'})
+                st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
             else:
                 st.info("Aún no se han ejecutado entregables de valor (Informes o Presentaciones) esta semana.")
 
             st.markdown("---")
             
-            # --- 4. GESTIÓN ESTRATÉGICA (Comercial y Administrativa) ---
+            # --- 4. GESTIÓN ESTRATÉGICA ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #ffc107;"><h4>🤝 Cuadrante 4: Gestión Estratégica Transversal</h4></div>', unsafe_allow_html=True)
             
             col_com, col_adm = st.columns(2)
@@ -1036,6 +1039,66 @@ def vista_reportes():
                     st.dataframe(df_adm.rename(columns={'accion': 'Detalle'}), use_container_width=True, hide_index=True)
                 else:
                     st.caption("Sin gestiones administrativas cerradas.")
+                    
+            # --- GENERADORES EXPORTACIÓN DASHBOARD ---
+            # Excel Resumen Ejecutivo
+            dash_wb = Workbook()
+            ws_resumen = dash_wb.active
+            ws_resumen.title = "Resumen Ejecutivo"
+            
+            ws_resumen.append(["Métrica Financiera", "UF"])
+            ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", uf_facturables_caja])
+            ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", uf_traccionadas_wip])
+            ws_resumen.append([])
+            ws_resumen.append(["KPI Operativo", "Valor"])
+            ws_resumen.append(["Adherencia al Plan (%)", f"{adherencia:.1f}%"])
+            ws_resumen.append(["Ratio de Esfuerzo Planificado (%)", f"{ratio_plan:.1f}%"])
+            ws_resumen.append(["Fricción (Urgencias) (%)", f"{ratio_urg:.1f}%"])
+            
+            if not df_entregables.empty:
+                ws_entregables = dash_wb.create_sheet("Entregables")
+                ws_entregables.append(list(df_mostrar.columns))
+                for row_val in df_mostrar.values.tolist():
+                    ws_entregables.append(row_val)
+                    
+            excel_dash_buffer = io.BytesIO()
+            dash_wb.save(excel_dash_buffer)
+            
+            # Word Resumen Ejecutivo
+            dash_doc = Document()
+            dash_doc.add_heading(f'Resumen Ejecutivo y Cumplimiento - {week_id_obj}', 0)
+            
+            dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=1)
+            dash_doc.add_paragraph(f"Ingreso Efectivo Facturable (Cierres/Rechazos): {uf_facturables_caja:,.2f} UF")
+            dash_doc.add_paragraph(f"Valor Potencial Traccionado (WIP / Proceso): {uf_traccionadas_wip:,.2f} UF")
+            
+            dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=1)
+            dash_doc.add_paragraph(f"Adherencia al Plan: {adherencia:.1f}%")
+            dash_doc.add_paragraph(f"Ratio de Esfuerzo Planificado: {ratio_plan:.1f}%")
+            dash_doc.add_paragraph(f"Fricción (Urgencias): {ratio_urg:.1f}%")
+            
+            if not df_entregables.empty:
+                dash_doc.add_heading('3. Inventario de Producción (Entregables)', level=1)
+                t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
+                t_ent.style = 'Table Grid'
+                for i, col_name in enumerate(df_mostrar.columns):
+                    t_ent.rows[0].cells[i].text = str(col_name)
+                    t_ent.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+                for row_val in df_mostrar.values.tolist():
+                    row_cells = t_ent.add_row().cells
+                    for i, val in enumerate(row_val):
+                        row_cells[i].text = str(val)
+                        
+            word_dash_buffer = io.BytesIO()
+            dash_doc.save(word_dash_buffer)
+            
+            st.markdown("---")
+            st.markdown("### Exportar Resumen Ejecutivo")
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                st.download_button("📥 DESCARGAR DASHBOARD (EXCEL)", data=excel_dash_buffer.getvalue(), file_name=f"Dashboard_Ejecutivo_{target_week_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            with col_d2:
+                st.download_button("📥 DESCARGAR DASHBOARD (WORD)", data=word_dash_buffer.getvalue(), file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
         # =========================================================
         # PESTAÑA 2: CARTA GANTT Y EXPORTACIÓN CORPORATIVA
@@ -1191,7 +1254,6 @@ def vista_reportes():
                 st.markdown("### Opciones de Exportación Corporativa")
                 col1, col2, col3 = st.columns(3)
                 
-                target_week_id = get_week_identifier(offset)
                 with col1:
                     st.download_button(
                         label="📥 DESCARGAR GANTT (EXCEL)",
