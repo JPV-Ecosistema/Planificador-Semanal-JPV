@@ -855,7 +855,7 @@ def vista_diario():
 
 # ---------------------------------------------------------
 # BLOQUE 4: VISTA - REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
-# VERSIÓN: 4.7 (Estructura Vertical Restaurada sin Compresión)
+# VERSIÓN: 4.8 (Word con Gráficos, Cajas Financieras y Detalle Operacional)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -979,27 +979,12 @@ def vista_reportes():
                 df_week['tramo_uf'] = 'N/D'
 
     # --- FUNCIONES GRÁFICAS Y ESTILOS ---
-    def obtener_color_kpi(valor):
-        if valor <= 50: 
-            return "#d9534f" # Rojo
-        elif valor < 80: 
-            return "#f0ad4e" # Amarillo
-        else: 
-            return "#28a745" # Verde
-
-    def crear_velocimetro(valor, titulo, inverso=False):
-        if inverso:
-            pasos = [
-                {'range': [0, 20], 'color': "#28a745"},
-                {'range': [20, 50], 'color': "#f0ad4e"},
-                {'range': [50, 100], 'color': "#d9534f"}
-            ]
-        else:
-            pasos = [
-                {'range': [0, 50], 'color': "#d9534f"},
-                {'range': [50, 79.99], 'color': "#f0ad4e"},
-                {'range': [80, 100], 'color': "#28a745"}
-            ]
+    def crear_velocimetro(valor, titulo):
+        pasos = [
+            {'range': [0, 50], 'color': "#d9534f"},
+            {'range': [50, 79.99], 'color': "#f0ad4e"},
+            {'range': [80, 100], 'color': "#28a745"}
+        ]
             
         fig = go.Figure(go.Indicator(
             mode = "gauge+number",
@@ -1081,18 +1066,17 @@ def vista_reportes():
             
             if total_esfuerzo > 0:
                 ratio_plan = (t_planificadas_hechas / total_esfuerzo) * 100
-                ratio_urg = (t_urgencias / total_esfuerzo) * 100
             else:
                 ratio_plan = 0
-                ratio_urg = 0
             
-            c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
+            fig_adh_dash = crear_velocimetro(adherencia, "Adherencia al Plan")
+            fig_pro_dash = crear_velocimetro(ratio_plan, "Ratio Planificado")
+            
+            c_kpi1, c_kpi2 = st.columns(2)
             with c_kpi1: 
-                st.plotly_chart(crear_velocimetro(adherencia, "Adherencia al Plan"), use_container_width=True, key="dash_adh")
+                st.plotly_chart(fig_adh_dash, use_container_width=True, key="dash_adh")
             with c_kpi2: 
-                st.plotly_chart(crear_velocimetro(ratio_plan, "Ratio Planificado"), use_container_width=True, key="dash_pro")
-            with c_kpi3: 
-                st.plotly_chart(crear_velocimetro(ratio_urg, "Fricción (Urgencias)", inverso=True), use_container_width=True, key="dash_urg")
+                st.plotly_chart(fig_pro_dash, use_container_width=True, key="dash_pro")
             st.markdown("---")
             
             # --- SECCIÓN ESPECIAL MCL ---
@@ -1175,7 +1159,6 @@ def vista_reportes():
             ws_resumen.append(["KPI Operativo", "Valor (%)"])
             ws_resumen.append(["Adherencia al Plan", round(adherencia, 1)])
             ws_resumen.append(["Ratio de Esfuerzo Planificado", round(ratio_plan, 1)])
-            ws_resumen.append(["Fricción (Urgencias)", round(ratio_urg, 1)])
             
             excel_dash_buffer = io.BytesIO()
             dash_wb.save(excel_dash_buffer)
@@ -1183,31 +1166,52 @@ def vista_reportes():
             dash_doc = Document()
             dash_doc.add_heading(f'Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
             
-            # Tabla Financiera
+            # Tabla Financiera Destacada
             dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=2)
             t_fin = dash_doc.add_table(rows=2, cols=2)
             t_fin.style = 'Table Grid'
-            t_fin.rows[0].cells[0].text = "Métrica Financiera"
-            t_fin.rows[0].cells[1].text = "Valor (UF)"
-            formatear_cabecera_tabla(t_fin)
-            t_fin.rows[1].cells[0].text = "Ingreso Efectivo Facturable (Cierres/Rechazos)"
-            t_fin.rows[1].cells[1].text = f"{uf_facturables_caja:,.2f}"
-            row_fin_2 = t_fin.add_row().cells
-            row_fin_2[0].text = "Valor Potencial Traccionado (WIP / Proceso)"
-            row_fin_2[1].text = f"{uf_traccionadas_wip:,.2f}"
+            t_fin.rows[0].cells[0].text = "Ingreso Efectivo Facturable (Caja)"
+            t_fin.rows[0].cells[1].text = "Valor Potencial Traccionado (WIP)"
+            formatear_cabecera_tabla(t_fin, "003366")
+            
+            celda_caja = t_fin.rows[1].cells[0]
+            celda_caja.text = f"{uf_facturables_caja:,.2f} UF"
+            celda_caja.paragraphs[0].runs[0].font.size = Pt(16)
+            celda_caja.paragraphs[0].runs[0].font.bold = True
+            celda_caja.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            celda_wip = t_fin.rows[1].cells[1]
+            celda_wip.text = f"{uf_traccionadas_wip:,.2f} UF"
+            celda_wip.paragraphs[0].runs[0].font.size = Pt(16)
+            celda_wip.paragraphs[0].runs[0].font.bold = True
+            celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             dash_doc.add_paragraph("")
             
-            # Tabla KPIs
+            # Tabla KPIs con Gráficos Plotly
             dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=2)
-            t_kpi = dash_doc.add_table(rows=2, cols=3)
-            t_kpi.style = 'Table Grid'
-            t_kpi.rows[0].cells[0].text = "Adherencia al Plan"
-            t_kpi.rows[0].cells[1].text = "Ratio Planificado"
-            t_kpi.rows[0].cells[2].text = "Fricción (Urgencias)"
-            formatear_cabecera_tabla(t_kpi, "17A2B8")
-            t_kpi.rows[1].cells[0].text = f"{adherencia:.1f}%"
-            t_kpi.rows[1].cells[1].text = f"{ratio_plan:.1f}%"
-            t_kpi.rows[1].cells[2].text = f"{ratio_urg:.1f}%"
+            t_kpi = dash_doc.add_table(rows=1, cols=2)
+            t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            try:
+                img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250)
+                celda_img_adh = t_kpi.rows[0].cells[0]
+                parrafo_adh = celda_img_adh.paragraphs[0]
+                run_adh = parrafo_adh.add_run()
+                run_adh.add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+                parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250)
+                celda_img_pro = t_kpi.rows[0].cells[1]
+                parrafo_pro = celda_img_pro.paragraphs[0]
+                run_pro = parrafo_pro.add_run()
+                run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+                parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            except Exception:
+                celda_img_adh = t_kpi.rows[0].cells[0]
+                celda_img_adh.text = f"Adherencia al Plan: {adherencia:.1f}%"
+                celda_img_pro = t_kpi.rows[0].cells[1]
+                celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
+                
             dash_doc.add_paragraph("")
 
             # Tabla MCL
@@ -1329,10 +1333,8 @@ def vista_reportes():
                     
                     if total_aj > 0:
                         rat_prog = (t_prog_hechas / total_aj) * 100
-                        rat_np = (t_np / total_aj) * 100
                     else:
                         rat_prog = 0
-                        rat_np = 0
                     
                     # Render UI
                     colA, colB = st.columns(2)
@@ -1341,19 +1343,92 @@ def vista_reportes():
                     with colB:
                         st.metric("Esfuerzo en Proceso (UF)", f"{uf_wip_aj:,.2f}")
                     
-                    c_op1, c_op2, c_op3 = st.columns(3)
+                    fig_adh_op = crear_velocimetro(adh_aj, "Adherencia")
+                    fig_pro_op = crear_velocimetro(rat_prog, "Proactivo")
+                    
+                    c_op1, c_op2 = st.columns(2)
                     with c_op1: 
-                        st.plotly_chart(crear_velocimetro(adh_aj, "Adherencia"), use_container_width=True, key=f"op_adh_{ajustador}")
+                        st.plotly_chart(fig_adh_op, use_container_width=True, key=f"op_adh_{ajustador}")
                     with c_op2: 
-                        st.plotly_chart(crear_velocimetro(rat_prog, "Proactivo"), use_container_width=True, key=f"op_pro_{ajustador}")
-                    with c_op3: 
-                        st.plotly_chart(crear_velocimetro(rat_np, "Reactivas", inverso=True), use_container_width=True, key=f"op_rea_{ajustador}")
+                        st.plotly_chart(fig_pro_op, use_container_width=True, key=f"op_pro_{ajustador}")
                     
-                    # Render Word Report
-                    op_doc.add_paragraph(f"Finanzas: {uf_caja_aj:,.2f} UF a Caja | {uf_wip_aj:,.2f} UF en Proceso (WIP)")
-                    op_doc.add_paragraph(f"Cumplimiento: Adherencia {adh_aj:.1f}% | Trabajo Proactivo {rat_prog:.1f}% | Urgencias {rat_np:.1f}%")
+                    # Render Word Report Financiero
+                    t_fin_op = op_doc.add_table(rows=2, cols=2)
+                    t_fin_op.style = 'Table Grid'
+                    t_fin_op.rows[0].cells[0].text = "Facturación Lograda (Caja)"
+                    t_fin_op.rows[0].cells[1].text = "Esfuerzo en Proceso (WIP)"
+                    formatear_cabecera_tabla(t_fin_op, "003366")
                     
+                    celda_caja_op = t_fin_op.rows[1].cells[0]
+                    celda_caja_op.text = f"{uf_caja_aj:,.2f} UF"
+                    celda_caja_op.paragraphs[0].runs[0].font.size = Pt(14)
+                    celda_caja_op.paragraphs[0].runs[0].font.bold = True
+                    celda_caja_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    
+                    celda_wip_op = t_fin_op.rows[1].cells[1]
+                    celda_wip_op.text = f"{uf_wip_aj:,.2f} UF"
+                    celda_wip_op.paragraphs[0].runs[0].font.size = Pt(14)
+                    celda_wip_op.paragraphs[0].runs[0].font.bold = True
+                    celda_wip_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    op_doc.add_paragraph("")
+                    
+                    # Render Word Report Velocímetros
+                    t_kpi_op = op_doc.add_table(rows=1, cols=2)
+                    t_kpi_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    
+                    try:
+                        img_adh_op_bytes = fig_adh_op.to_image(format="png", width=400, height=250)
+                        celda_img_adh_op = t_kpi_op.rows[0].cells[0]
+                        parrafo_adh_op = celda_img_adh_op.paragraphs[0]
+                        run_adh_op = parrafo_adh_op.add_run()
+                        run_adh_op.add_picture(io.BytesIO(img_adh_op_bytes), width=Cm(7.5))
+                        parrafo_adh_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        
+                        img_pro_op_bytes = fig_pro_op.to_image(format="png", width=400, height=250)
+                        celda_img_pro_op = t_kpi_op.rows[0].cells[1]
+                        parrafo_pro_op = celda_img_pro_op.paragraphs[0]
+                        run_pro_op = parrafo_pro_op.add_run()
+                        run_pro_op.add_picture(io.BytesIO(img_pro_op_bytes), width=Cm(7.5))
+                        parrafo_pro_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    except Exception:
+                        celda_img_adh_op = t_kpi_op.rows[0].cells[0]
+                        celda_img_adh_op.text = f"Adherencia: {adh_aj:.1f}%"
+                        celda_img_pro_op = t_kpi_op.rows[0].cells[1]
+                        celda_img_pro_op.text = f"Proactivo: {rat_prog:.1f}%"
+                        
+                    op_doc.add_paragraph("")
+                    
+                    # Desglose Operativo Completo en UI y Word
                     with st.expander(f"Ver desglose operativo detallado"):
+                        
+                        # 1. Trabajo Programado
+                        df_prog_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'][['numero_caso', 'asegurado', 'accion', 'honorarios_estimados']]
+                        if not df_prog_view.empty:
+                            st.markdown("**✅ Trabajo Programado Realizado:**")
+                            st.dataframe(df_prog_view, use_container_width=True, hide_index=True)
+                            
+                            op_doc.add_heading('Trabajo Programado Realizado:', level=3)
+                            t_prog_w = op_doc.add_table(rows=1, cols=4)
+                            t_prog_w.style = 'Table Grid'
+                            
+                            t_prog_w.rows[0].cells[0].text = "Caso"
+                            t_prog_w.rows[0].cells[1].text = "Asegurado"
+                            t_prog_w.rows[0].cells[2].text = "Acción"
+                            t_prog_w.rows[0].cells[3].text = "Hon UF"
+                            
+                            formatear_cabecera_tabla(t_prog_w, "003366")
+                            
+                            for r_v in df_prog_view.values.tolist():
+                                r_c = t_prog_w.add_row().cells
+                                r_c[0].text = str(r_v[0])
+                                r_c[1].text = str(r_v[1])
+                                r_c[2].text = str(r_v[2])
+                                try:
+                                    r_c[3].text = f"{float(r_v[3]):,.2f}"
+                                except:
+                                    r_c[3].text = "0.00"
+                        
+                        # 2. Urgencias
                         if t_np > 0:
                             st.markdown("**🔴 Detalle de Carga No Programada (Urgencias):**")
                             df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
@@ -1373,6 +1448,7 @@ def vista_reportes():
                                 for i, v in enumerate(r_v): 
                                     r_c[i].text = str(v)
                         
+                        # 3. Gestiones Estratégicas
                         cond_estr_aj = (df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])) & (~df_aj_realizado['accion'].isin(['0', ' ', '', 0]))
                         df_estr = df_aj_realizado[cond_estr_aj]
                         
@@ -1381,8 +1457,18 @@ def vista_reportes():
                             st.dataframe(df_estr[['categoria', 'accion']], use_container_width=True, hide_index=True)
                             
                             op_doc.add_heading('Gestión Estratégica:', level=3)
+                            t_est_w = op_doc.add_table(rows=1, cols=2)
+                            t_est_w.style = 'Table Grid'
+                            
+                            t_est_w.rows[0].cells[0].text = "Categoría"
+                            t_est_w.rows[0].cells[1].text = "Acción / Detalle"
+                            
+                            formatear_cabecera_tabla(t_est_w, "17A2B8")
+                            
                             for _, r in df_estr.iterrows():
-                                op_doc.add_paragraph(f"[{r['categoria']}] {r['accion']}", style='List Bullet')
+                                r_c = t_est_w.add_row().cells
+                                r_c[0].text = str(r['categoria'])
+                                r_c[1].text = str(r['accion'])
                                 
                     op_doc.add_paragraph("")
                 st.markdown("---")
