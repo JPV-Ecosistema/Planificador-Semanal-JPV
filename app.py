@@ -854,9 +854,8 @@ def vista_diario():
             st.caption(f"Avance de cumplimiento global: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
 # ---------------------------------------------------------
-# ---------------------------------------------------------
-# BLOQUE 4: VISTA - REPORTE DE JEFATURA (GANTT Y DASHBOARD EJECUTIVO)
-# VERSIÓN: 4.1 (Dashboard Ejecutivo Descargable y Nomenclatura)
+# BLOQUE 4: VISTA - REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
+# VERSIÓN: 4.2 (Word Gráfico, Tab Operacional, MCL y Control de Decimales)
 # ---------------------------------------------------------
 def vista_reportes():
     import io
@@ -883,14 +882,14 @@ def vista_reportes():
 
     offset = 0 if week_id_obj == "Semana Actual" else 1
     
-    # --- CÁLCULO EXACTO DE LOS DÍAS DE LA SEMANA SELECCIONADA ---
+    # --- CÁLCULO DE FECHAS ---
     hoy = datetime.now()
     target_date = hoy + timedelta(weeks=offset)
     lunes = target_date - timedelta(days=target_date.weekday())
     dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
     target_week_id = get_week_identifier(offset)
     
-    # --- MOTOR DE SINCRONIZACIÓN MASIVA DESDE LA NUBE ---
+    # --- MOTOR DE SINCRONIZACIÓN ---
     archivos_existentes = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith('.json')]
     
     if forzar_sync or len(archivos_existentes) == 0:
@@ -912,21 +911,23 @@ def vista_reportes():
                     if forzar_sync:
                         st.success("¡Sincronización completada! Todos los planes están actualizados.")
                 except Exception as e:
-                    st.warning(f"Error al sincronizar masivamente con la nube: {e}")
+                    st.warning(f"Error al sincronizar con la nube: {e}")
     
-    # --- LECTURA GLOBAL DE TODOS LOS ARCHIVOS ---
+    # --- LECTURA GLOBAL Y CRUCE MAESTRO ---
     archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json') and f != "BASE_MAESTRA.json"]
     
-    if not archivos_json:
-        st.warning("No hay planes registrados en el servidor ni en la nube en este momento.")
-        return
-        
     df_maestro = load_master_base()
     diccionario_nicknames = {}
-    if df_maestro is not None and 'Número de caso' in df_maestro.columns and 'Nickname' in df_maestro.columns:
-        for _, row in df_maestro.iterrows():
-            if pd.notna(row['Número de caso']) and str(row['Número de caso']).strip() != "":
-                diccionario_nicknames[str(row['Número de caso'])] = str(row['Nickname']) if pd.notna(row['Nickname']) else ""
+    ajustadores_validos = []
+    
+    if df_maestro is not None:
+        if 'Número de caso' in df_maestro.columns and 'Nickname' in df_maestro.columns:
+            for _, row in df_maestro.iterrows():
+                if pd.notna(row['Número de caso']) and str(row['Número de caso']).strip() != "":
+                    diccionario_nicknames[str(row['Número de caso'])] = str(row['Nickname']) if pd.notna(row['Nickname']) else ""
+        
+        col_ajustador = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
+        ajustadores_validos = sorted(df_maestro[col_ajustador].dropna().unique())
 
     datos_consolidados = []
     for archivo in archivos_json:
@@ -944,48 +945,46 @@ def vista_reportes():
         except Exception:
             pass
 
+    df_week = pd.DataFrame()
     if datos_consolidados:
         df_raw = pd.DataFrame(datos_consolidados)
-        
         df_raw['fecha_filtro'] = pd.to_datetime(df_raw['fecha_compromiso'], errors='coerce').dt.date
         df_week = df_raw[df_raw['fecha_filtro'].isin(dias_semana_target)].copy()
         
+        if not df_week.empty:
+            if 'honorarios_estimados' not in df_week.columns:
+                df_week['honorarios_estimados'] = 0.0
+            df_week['honorarios_estimados'] = pd.to_numeric(df_week['honorarios_estimados'], errors='coerce').fillna(0.0)
+            if 'tramo_uf' not in df_week.columns:
+                df_week['tramo_uf'] = 'N/D'
+
+    # ---------------------------------------------------------
+    # ARQUITECTURA DE PESTAÑAS (3 TABS)
+    # ---------------------------------------------------------
+    tab_dashboard, tab_operacional, tab_gantt = st.tabs(["📈 Dashboard Ejecutivo (BI)", "📋 Reporte Operacional de Equipo", "📊 Carta Gantt Operativa"])
+    
+    # =========================================================
+    # PESTAÑA 1: DASHBOARD EJECUTIVO
+    # =========================================================
+    with tab_dashboard:
         if df_week.empty:
-            st.info(f"Los ajustadores han guardado planes, pero ninguno contiene tareas para las fechas entre el {dias_semana_target[0].strftime('%d/%m')} y el {dias_semana_target[-1].strftime('%d/%m')}.")
-            return
-
-        if 'honorarios_estimados' not in df_week.columns:
-            df_week['honorarios_estimados'] = 0.0
-        df_week['honorarios_estimados'] = pd.to_numeric(df_week['honorarios_estimados'], errors='coerce').fillna(0.0)
-
-        # ---------------------------------------------------------
-        # ARQUITECTURA DE PESTAÑAS
-        # ---------------------------------------------------------
-        tab_dashboard, tab_gantt = st.tabs(["📈 Dashboard Ejecutivo (BI)", "📊 Carta Gantt Operativa"])
-        
-        # =========================================================
-        # PESTAÑA 1: DASHBOARD EJECUTIVO
-        # =========================================================
-        with tab_dashboard:
+            st.info("No hay datos cargados para generar el Dashboard en esta semana.")
+        else:
             df_realizados = df_week[df_week['estado_cumplimiento'] == 'Realizado'].copy()
             
             # --- 1. RESUMEN EJECUTIVO FINANCIERO ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #003366;"><h4>💰 Cuadrante 1: Valorización de Cartera y Facturación Proyectada</h4></div>', unsafe_allow_html=True)
-            
             cond_facturable = df_realizados['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-            
             uf_facturables_caja = df_realizados[cond_facturable]['honorarios_estimados'].sum()
             uf_traccionadas_wip = df_realizados[(df_realizados['categoria'] == 'Operativa') & (~cond_facturable)]['honorarios_estimados'].sum()
             
             c_fin1, c_fin2 = st.columns(2)
             c_fin1.metric("Ingreso Efectivo Facturable (Cierres/Rechazos)", f"{uf_facturables_caja:,.2f} UF", delta="Directo a Caja", delta_color="normal")
             c_fin2.metric("Valor Potencial Traccionado (WIP / Proceso)", f"{uf_traccionadas_wip:,.2f} UF", delta="Esfuerzo Operativo", delta_color="off")
-            
             st.markdown("---")
             
-            # --- 2. KPIS DE CUMPLIMIENTO Y COMPORTAMIENTO ---
+            # --- 2. KPIS DE CUMPLIMIENTO ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #17a2b8;"><h4>⏱️ Cuadrante 2: Métricas de Cumplimiento y Carga Operativa</h4></div>', unsafe_allow_html=True)
-            
             t_planificadas = len(df_week[df_week['tipo_actividad'] == 'Programada'])
             t_planificadas_hechas = len(df_realizados[df_realizados['tipo_actividad'] == 'Programada'])
             t_urgencias = len(df_realizados[df_realizados['tipo_actividad'] == 'No Programada'])
@@ -999,100 +998,145 @@ def vista_reportes():
             c_kpi1.metric("Adherencia al Plan", f"{adherencia:.1f}%", f"{t_planificadas_hechas} de {t_planificadas} Tareas Originales")
             c_kpi2.metric("Ratio de Esfuerzo Planificado", f"{ratio_plan:.1f}%", "Trabajo Proactivo", delta_color="normal")
             c_kpi3.metric("Fricción (No Programado/Urgencias)", f"{ratio_urg:.1f}%", f"{t_urgencias} Actividades Reactivas", delta_color="inverse")
-            
             st.markdown("---")
             
-            # --- 3. INVENTARIO DE PRODUCCIÓN (Limpieza de Sustantivos) ---
+            # --- SECCIÓN ESPECIAL MCL ---
+            st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🏆 Radar de Casos MCL (Major and Complex Losses)</h4></div>', unsafe_allow_html=True)
+            cond_mcl = df_realizados['tramo_uf'].str.contains('MCL|> 5', case=False, na=False)
+            df_mcl = df_realizados[cond_mcl][['Ajustador', 'numero_caso', 'asegurado', 'accion', 'honorarios_estimados']].copy()
+            if not df_mcl.empty:
+                df_mcl['honorarios_estimados'] = df_mcl['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
+                st.dataframe(df_mcl.rename(columns={'numero_caso': 'Caso', 'asegurado': 'Asegurado', 'accion': 'Gestión MCL', 'honorarios_estimados': 'Hon UF'}), use_container_width=True, hide_index=True)
+            else:
+                st.info("Sin movimientos reportados en casos de tramo MCL esta semana.")
+            st.markdown("---")
+
+            # --- 3. INVENTARIO DE PRODUCCIÓN ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #28a745;"><h4>🏭 Cuadrante 3: Inventario de Producción (Entregables de Valor)</h4></div>', unsafe_allow_html=True)
-            
             cond_entregables = df_realizados['accion'].str.contains('Preparar Informe|Presentación pptx|Presentacion on line', case=False, na=False)
             df_entregables = df_realizados[cond_entregables][['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion', 'honorarios_estimados']].copy()
             
             if not df_entregables.empty:
-                # Motor de limpieza de verbos para entregar sustantivos puros
                 df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
                 df_entregables['accion'] = df_entregables['accion'].str.replace('Reunión - ', '', regex=False)
-                
+                df_entregables['honorarios_estimados'] = df_entregables['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
                 df_mostrar = df_entregables.rename(columns={'numero_caso': 'Caso', 'asegurado': 'Asegurado', 'accion': 'Tipo de Entregable', 'honorarios_estimados': 'Hon UF'})
                 st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
             else:
                 st.info("Aún no se han ejecutado entregables de valor (Informes o Presentaciones) esta semana.")
-
             st.markdown("---")
             
             # --- 4. GESTIÓN ESTRATÉGICA ---
             st.markdown('<div class="marco-gestion" style="border-left: 5px solid #ffc107;"><h4>🤝 Cuadrante 4: Gestión Estratégica Transversal</h4></div>', unsafe_allow_html=True)
-            
             col_com, col_adm = st.columns(2)
             with col_com:
-                st.markdown("**Gestiones Comerciales Ejecutadas:**")
+                st.markdown("**Gestiones Comerciales:**")
                 df_com = df_realizados[df_realizados['categoria'] == 'Gestión Comercial'][['Ajustador', 'accion']]
                 if not df_com.empty:
                     st.dataframe(df_com.rename(columns={'accion': 'Detalle'}), use_container_width=True, hide_index=True)
                 else:
                     st.caption("Sin gestiones comerciales cerradas.")
-                    
             with col_adm:
-                st.markdown("**Gestiones Administrativas Ejecutadas:**")
+                st.markdown("**Gestiones Administrativas:**")
                 df_adm = df_realizados[df_realizados['categoria'] == 'Gestión Administrativa'][['Ajustador', 'accion']]
                 if not df_adm.empty:
                     st.dataframe(df_adm.rename(columns={'accion': 'Detalle'}), use_container_width=True, hide_index=True)
                 else:
                     st.caption("Sin gestiones administrativas cerradas.")
                     
-            # --- GENERADORES EXPORTACIÓN DASHBOARD ---
-            # Excel Resumen Ejecutivo
+            # --- GENERADORES EXPORTACIÓN DASHBOARD (WORD GRÁFICO) ---
             dash_wb = Workbook()
             ws_resumen = dash_wb.active
             ws_resumen.title = "Resumen Ejecutivo"
-            
             ws_resumen.append(["Métrica Financiera", "UF"])
-            ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", uf_facturables_caja])
-            ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", uf_traccionadas_wip])
+            ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", round(uf_facturables_caja, 2)])
+            ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", round(uf_traccionadas_wip, 2)])
             ws_resumen.append([])
             ws_resumen.append(["KPI Operativo", "Valor"])
             ws_resumen.append(["Adherencia al Plan (%)", f"{adherencia:.1f}%"])
             ws_resumen.append(["Ratio de Esfuerzo Planificado (%)", f"{ratio_plan:.1f}%"])
             ws_resumen.append(["Fricción (Urgencias) (%)", f"{ratio_urg:.1f}%"])
-            
-            if not df_entregables.empty:
-                ws_entregables = dash_wb.create_sheet("Entregables")
-                ws_entregables.append(list(df_mostrar.columns))
-                for row_val in df_mostrar.values.tolist():
-                    ws_entregables.append(row_val)
-                    
             excel_dash_buffer = io.BytesIO()
             dash_wb.save(excel_dash_buffer)
             
-            # Word Resumen Ejecutivo
+            # Funciones de estilo para Word
+            def formatear_cabecera_tabla(table, bg_color="003366"):
+                hdr_cells = table.rows[0].cells
+                for cell in hdr_cells:
+                    run = cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(cell.text)
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), bg_color))
+                    cell._tc.get_or_add_tcPr().append(shading_elm)
+
             dash_doc = Document()
-            dash_doc.add_heading(f'Resumen Ejecutivo y Cumplimiento - {week_id_obj}', 0)
+            dash_doc.add_heading(f'Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
             
-            dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=1)
-            dash_doc.add_paragraph(f"Ingreso Efectivo Facturable (Cierres/Rechazos): {uf_facturables_caja:,.2f} UF")
-            dash_doc.add_paragraph(f"Valor Potencial Traccionado (WIP / Proceso): {uf_traccionadas_wip:,.2f} UF")
+            # Tabla Financiera
+            dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=2)
+            t_fin = dash_doc.add_table(rows=2, cols=2)
+            t_fin.style = 'Table Grid'
+            t_fin.rows[0].cells[0].text, t_fin.rows[0].cells[1].text = "Métrica Financiera", "Valor (UF)"
+            formatear_cabecera_tabla(t_fin)
+            t_fin.rows[1].cells[0].text = "Ingreso Efectivo Facturable (Cierres/Rechazos)"
+            t_fin.rows[1].cells[1].text = f"{uf_facturables_caja:,.2f}"
+            t_fin.add_row().cells[0].text = "Valor Potencial Traccionado (WIP / Proceso)"
+            t_fin.rows[2].cells[1].text = f"{uf_traccionadas_wip:,.2f}"
+            dash_doc.add_paragraph("")
             
-            dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=1)
-            dash_doc.add_paragraph(f"Adherencia al Plan: {adherencia:.1f}%")
-            dash_doc.add_paragraph(f"Ratio de Esfuerzo Planificado: {ratio_plan:.1f}%")
-            dash_doc.add_paragraph(f"Fricción (Urgencias): {ratio_urg:.1f}%")
+            # Tabla KPIs
+            dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=2)
+            t_kpi = dash_doc.add_table(rows=2, cols=3)
+            t_kpi.style = 'Table Grid'
+            t_kpi.rows[0].cells[0].text, t_kpi.rows[0].cells[1].text, t_kpi.rows[0].cells[2].text = "Adherencia al Plan", "Ratio Planificado", "Fricción (Urgencias)"
+            formatear_cabecera_tabla(t_kpi, "17A2B8")
+            t_kpi.rows[1].cells[0].text = f"{adherencia:.1f}%"
+            t_kpi.rows[1].cells[1].text = f"{ratio_plan:.1f}%"
+            t_kpi.rows[1].cells[2].text = f"{ratio_urg:.1f}%"
+            dash_doc.add_paragraph("")
+
+            # Tabla MCL
+            if not df_mcl.empty:
+                dash_doc.add_heading('Radar de Casos MCL', level=2)
+                t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl.columns))
+                t_mcl.style = 'Table Grid'
+                for i, col_name in enumerate(["Ajustador", "Caso", "Asegurado", "Gestión MCL", "Hon UF"]):
+                    t_mcl.rows[0].cells[i].text = col_name
+                formatear_cabecera_tabla(t_mcl, "D9534F")
+                for row_val in df_mcl.values.tolist():
+                    row_cells = t_mcl.add_row().cells
+                    for i, val in enumerate(row_val):
+                        row_cells[i].text = str(val)
+                dash_doc.add_paragraph("")
             
+            # Tabla Entregables
             if not df_entregables.empty:
-                dash_doc.add_heading('3. Inventario de Producción (Entregables)', level=1)
+                dash_doc.add_heading('3. Inventario de Producción (Entregables)', level=2)
                 t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
                 t_ent.style = 'Table Grid'
                 for i, col_name in enumerate(df_mostrar.columns):
                     t_ent.rows[0].cells[i].text = str(col_name)
-                    t_ent.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+                formatear_cabecera_tabla(t_ent, "28A745")
                 for row_val in df_mostrar.values.tolist():
                     row_cells = t_ent.add_row().cells
                     for i, val in enumerate(row_val):
                         row_cells[i].text = str(val)
-                        
+                dash_doc.add_paragraph("")
+                
+            # Tablas Comerciales y Admin
+            dash_doc.add_heading('4. Gestión Estratégica Transversal', level=2)
+            if not df_com.empty:
+                dash_doc.add_paragraph("Gestiones Comerciales:", style='List Bullet')
+                for _, row in df_com.iterrows():
+                    dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
+            if not df_adm.empty:
+                dash_doc.add_paragraph("Gestiones Administrativas:", style='List Bullet')
+                for _, row in df_adm.iterrows():
+                    dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
+
             word_dash_buffer = io.BytesIO()
             dash_doc.save(word_dash_buffer)
             
-            st.markdown("---")
             st.markdown("### Exportar Resumen Ejecutivo")
             col_d1, col_d2 = st.columns(2)
             with col_d1:
@@ -1100,182 +1144,152 @@ def vista_reportes():
             with col_d2:
                 st.download_button("📥 DESCARGAR DASHBOARD (WORD)", data=word_dash_buffer.getvalue(), file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        # =========================================================
-        # PESTAÑA 2: CARTA GANTT Y EXPORTACIÓN CORPORATIVA
-        # =========================================================
-        with tab_gantt:
-            if 'categoria' in df_week.columns:
-                df_operativa = df_week[df_week['categoria'] == 'Operativa'].copy()
-            else:
-                df_operativa = df_week.copy()
+    # =========================================================
+    # PESTAÑA 2: REPORTE OPERACIONAL DE EQUIPO (DETALLE INTERNO)
+    # =========================================================
+    with tab_operacional:
+        st.markdown("### 📋 Radiografía Operacional por Ajustador")
+        st.markdown("Análisis individual para reuniones de seguimiento y evaluación de carga de trabajo.")
+        
+        if not ajustadores_validos:
+            st.warning("No se pudo cargar la lista de ajustadores desde la Base Maestra.")
+        else:
+            for ajustador in ajustadores_validos:
+                if df_week.empty:
+                    st.markdown(f"#### {ajustador}")
+                    st.markdown("<h5 style='color:#d9534f;'>🚨 AJUSTADOR SIN PLAN</h5>", unsafe_allow_html=True)
+                    st.markdown("---")
+                    continue
+                
+                df_aj = df_week[df_week['Ajustador'] == ajustador].copy()
+                st.markdown(f"#### 👤 {ajustador}")
+                
+                if df_aj.empty:
+                    st.markdown("<h5 style='color:#d9534f; background-color:#f9dede; padding:10px; border-radius:5px;'>🚨 AJUSTADOR SIN PLAN ESTA SEMANA</h5>", unsafe_allow_html=True)
+                else:
+                    df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
+                    t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
+                    t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
+                    t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'])
+                    
+                    adh_aj = (t_prog_hechas / t_prog * 100) if t_prog > 0 else 0
+                    total_aj = t_prog_hechas + t_np
+                    rat_prog = (t_prog_hechas / total_aj * 100) if total_aj > 0 else 0
+                    rat_np = (t_np / total_aj * 100) if total_aj > 0 else 0
+                    
+                    c_op1, c_op2, c_op3 = st.columns(3)
+                    c_op1.metric("Cumplimiento del Plan", f"{adh_aj:.0f}%", f"{t_prog_hechas}/{t_prog} tareas")
+                    c_op2.metric("Trabajo Programado", f"{rat_prog:.0f}%", "Proactivo")
+                    c_op3.metric("Trabajo No Programado", f"{rat_np:.0f}%", "Urgencias/Reactivas", delta_color="inverse")
+                    
+                    with st.expander(f"Ver desglose detallado de {ajustador}"):
+                        if t_np > 0:
+                            st.markdown("**🔴 Detalle de Carga No Programada (Urgencias):**")
+                            df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
+                            st.dataframe(df_np_view, use_container_width=True, hide_index=True)
+                        else:
+                            st.caption("No registró actividades fuera de programa.")
+                            
+                        # Admin y Comercial
+                        cond_estr = df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])
+                        if cond_estr.any():
+                            st.markdown("**🔵 Gestiones Comerciales y Administrativas:**")
+                            st.dataframe(df_aj_realizado[cond_estr][['categoria', 'accion']], use_container_width=True, hide_index=True)
+                st.markdown("---")
+
+    # =========================================================
+    # PESTAÑA 3: CARTA GANTT Y EXPORTACIÓN CORPORATIVA
+    # =========================================================
+    with tab_gantt:
+        if df_week.empty:
+            st.info("No hay tareas operativas planificadas aún para esta semana.")
+        else:
+            df_operativa = df_week[df_week['categoria'] == 'Operativa'].copy() if 'categoria' in df_week.columns else df_week.copy()
             
             if not df_operativa.empty:
                 df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso'], errors='coerce').dt.date
-                
                 if 'estado_proyectado' not in df_operativa.columns:
                     df_operativa['estado_proyectado'] = 'N/D'
-                if 'subestado_proyectado' not in df_operativa.columns:
-                    df_operativa['subestado_proyectado'] = 'N/D'
 
                 df_operativa = df_operativa.sort_values(by=['Ajustador', 'fecha_compromiso'])
-
                 df_gantt_visual = df_operativa.pivot_table(
                     index=['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'estado_proyectado'], 
-                    columns='fecha_compromiso', 
-                    values='accion', 
-                    aggfunc=lambda x: ' | '.join(x)
+                    columns='fecha_compromiso', values='accion', aggfunc=lambda x: ' | '.join(x)
                 ).fillna('')
                 
                 st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la división)")
                 st.dataframe(df_gantt_visual, use_container_width=True)
 
-                # --- EXCEL NATIVO ---
+                # Exportación Excel Gantt
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Plan Semanal Gantt"
-                
                 fechas_unicas = dias_semana_target 
-                headers_excel = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"] + [f.strftime('%A %d-%m') for f in fechas_unicas] + ["Hon UF"]
-                ws.append(headers_excel)
+                ws.append(["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"] + [f.strftime('%A %d-%m') for f in fechas_unicas] + ["Hon UF"])
                 
                 grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
                 for name, group in grouped:
-                    ajustador, caso, nickname, asegurado, accion = name
-                    honorarios_totales = group['honorarios_estimados'].sum()
-                    row = [ajustador, caso, nickname, asegurado, accion]
+                    row = list(name)
                     for f in fechas_unicas:
-                        if f in group['fecha_compromiso'].values:
-                            row.append("X")
-                        else:
-                            row.append("")
-                    row.append(honorarios_totales)
+                        row.append("X" if f in group['fecha_compromiso'].values else "")
+                    row.append(round(group['honorarios_estimados'].sum(), 2))
                     ws.append(row)
                     
                 header_fill = PatternFill(start_color="003366", end_color="003366", fill_type="solid")
-                header_font = Font(color="FFFFFF", bold=True)
-                thin_border = Border(left=Side(style='thin', color='D3D3D3'), right=Side(style='thin', color='D3D3D3'), 
-                                     top=Side(style='thin', color='D3D3D3'), bottom=Side(style='thin', color='D3D3D3'))
-                center_alignment = Alignment(horizontal="center", vertical="center")
-                
                 for cell in ws[1]:
-                    cell.fill = header_fill
-                    cell.font = header_font
-                    cell.alignment = center_alignment
-                    cell.border = thin_border
-                    
-                for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
-                    for cell in row:
-                        cell.border = thin_border
-                        if 4 < cell.column <= (5 + len(fechas_unicas)):
-                            cell.alignment = center_alignment
-                            if cell.value == "X":
-                                cell.fill = PatternFill(start_color="217346", end_color="217346", fill_type="solid")
-                                cell.font = Font(color="FFFFFF", bold=True)
-                
-                for i, width in enumerate([20, 10, 15, 30, 30] + [12]*len(fechas_unicas) + [10], 1):
-                    ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
-                    
+                    cell.fill, cell.font, cell.alignment = header_fill, Font(color="FFFFFF", bold=True), Alignment(horizontal="center", vertical="center")
                 excel_buffer = io.BytesIO()
                 wb.save(excel_buffer)
                 
-                # --- WORD NATIVO (HORIZONTAL, CASCADA Y HONORARIOS) ---
+                # Exportación Word Gantt
                 doc = Document()
                 section = doc.sections[-1]
-                new_width, new_height = section.page_height, section.page_width
-                section.orientation = WD_ORIENT.LANDSCAPE
-                section.page_width = new_width
-                section.page_height = new_height
-                section.top_margin = Cm(1.27)
-                section.bottom_margin = Cm(1.27)
-                section.left_margin = Cm(1.27)
-                section.right_margin = Cm(1.27)
+                section.orientation, section.page_width, section.page_height = WD_ORIENT.LANDSCAPE, section.page_height, section.page_width
+                section.top_margin, section.bottom_margin, section.left_margin, section.right_margin = Cm(1.27), Cm(1.27), Cm(1.27), Cm(1.27)
 
                 doc.add_heading(f'Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
-                doc.add_paragraph('Visión gerencial estructurada por Casos, Tareas y Entregables en la línea de tiempo.')
-                
                 headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "S", "D", "Hon UF"]
                 table = doc.add_table(rows=1, cols=len(headers_word))
                 table.style = 'Table Grid'
-                hdr_cells = table.rows[0].cells
                 
                 for i, title in enumerate(headers_word):
-                    hdr_cells[i].text = title
-                    for run in hdr_cells[i].paragraphs[0].runs:
-                        run.font.bold = True
-                        run.font.size = Pt(8)
-                        run.font.color.rgb = RGBColor(255, 255, 255)
-                    hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
-                    hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                    table.rows[0].cells[i].text = title
+                    table.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+                    table.rows[0].cells[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
+                    table.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    table.rows[0].cells[i]._tc.get_or_add_tcPr().append(parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w'))))
                     
                 ajustador_previo = ""
-                
                 for _, row_data in df_operativa.iterrows():
                     row_cells = table.add_row().cells
-                    
                     ajustador_actual = str(row_data['Ajustador'])
-                    if ajustador_actual == ajustador_previo:
-                        row_cells[0].text = ""
-                    else:
-                        row_cells[0].text = ajustador_actual
-                        ajustador_previo = ajustador_actual
-                        
-                    row_cells[1].text = str(row_data['numero_caso'])
-                    row_cells[2].text = str(row_data['Nick Name'])
-                    row_cells[3].text = str(row_data['asegurado'])
-                    row_cells[4].text = str(row_data['accion'])
+                    row_cells[0].text = "" if ajustador_actual == ajustador_previo else ajustador_actual
+                    ajustador_previo = ajustador_actual
+                    row_cells[1].text, row_cells[2].text, row_cells[3].text, row_cells[4].text = str(row_data['numero_caso']), str(row_data['Nick Name']), str(row_data['asegurado']), str(row_data['accion'])
                     
                     try:
-                        dia_idx = pd.to_datetime(row_data['fecha_compromiso']).weekday()
-                        col_idx = 5 + dia_idx
-                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
-                        row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
-                    except:
-                        pass
+                        col_idx = 5 + pd.to_datetime(row_data['fecha_compromiso']).weekday()
+                        row_cells[col_idx]._tc.get_or_add_tcPr().append(parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))))
+                    except: pass
                     
                     try:
-                        uf_val = float(row_data['honorarios_estimados'])
-                        row_cells[12].text = f"{uf_val:,.2f}" if uf_val > 0 else "-"
-                    except:
-                        row_cells[12].text = "-"
+                        row_cells[12].text = f"{float(row_data['honorarios_estimados']):,.2f}" if float(row_data['honorarios_estimados']) > 0 else "-"
+                    except: row_cells[12].text = "-"
 
                     for i, cell in enumerate(row_cells):
                         for paragraph in cell.paragraphs:
-                            for run in paragraph.runs:
-                                run.font.size = Pt(7.5)
-                            if i >= 5: 
-                                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            for run in paragraph.runs: run.font.size = Pt(7.5)
+                            if i >= 5: paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
                 word_buffer = io.BytesIO()
                 doc.save(word_buffer)
 
-                # --- BOTONES DE DESCARGA ---
                 st.markdown("---")
-                st.markdown("### Opciones de Exportación Corporativa")
+                st.markdown("### Opciones de Exportación Gantt Corporativa")
                 col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.download_button(
-                        label="📥 DESCARGAR GANTT (EXCEL)",
-                        data=excel_buffer.getvalue(),
-                        file_name=f"Gantt_Planificacion_{target_week_id}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                with col2:
-                    st.download_button(
-                        label="📥 DESCARGAR REPORTE (WORD)",
-                        data=word_buffer.getvalue(),
-                        file_name=f"Reporte_Planificacion_{target_week_id}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    )
-                with col3:
-                    csv_raw = df_raw.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(
-                        label="📥 DESCARGAR DATA BRUTA (CSV)",
-                        data=csv_raw,
-                        file_name=f"Data_Bruta_{target_week_id}.csv",
-                        mime="text/csv",
-                    )
+                with col1: st.download_button("📥 DESCARGAR GANTT (EXCEL)", data=excel_buffer.getvalue(), file_name=f"Gantt_Planificacion_{target_week_id}.xlsx")
+                with col2: st.download_button("📥 DESCARGAR REPORTE (WORD)", data=word_buffer.getvalue(), file_name=f"Reporte_Planificacion_{target_week_id}.docx")
+                with col3: st.download_button("📥 DESCARGAR DATA BRUTA (CSV)", data=df_raw.to_csv(index=False).encode('utf-8-sig'), file_name=f"Data_Bruta_{target_week_id}.csv")
             else:
                 st.info("No hay tareas operativas (casos) planificadas aún para esta semana.")
 # ---------------------------------------------------------
