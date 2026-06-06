@@ -1015,7 +1015,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import streamlit as st
     from openpyxl import Workbook
     from docx import Document
-    from docx.shared import Pt, Cm
+    from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     
     if df_week.empty:
@@ -1099,7 +1099,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     cond_entregables = df_realizados['accion'].str.contains('Preparar Informe|Presentación pptx|Presentacion on line', case=False, na=False)
     df_entregables = df_realizados[cond_entregables][['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion', 'honorarios_estimados']].copy()
     
-    df_mostrar = pd.DataFrame(columns=['Caso', 'Asegurado', 'Tipo de Entregable', 'Hon UF'])
+    df_mostrar = pd.DataFrame(columns=['Ajustador', 'Caso', 'Nick Name', 'Asegurado', 'Tipo de Entregable', 'Hon UF'])
     
     if not df_entregables.empty:
         df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
@@ -1159,32 +1159,36 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     excel_dash_buffer = io.BytesIO()
     dash_wb.save(excel_dash_buffer)
 
+    # DOCUMENTO WORD - DISEÑO TIPO DASHBOARD
     dash_doc = Document()
-    dash_doc.add_heading(f'Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
+    dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
-    # Tabla Financiera Destacada
-    dash_doc.add_heading('1. Valorización de Cartera y Facturación Proyectada', level=2)
+    # 1. Tabla Financiera VIP (Formato Tarjeta)
+    dash_doc.add_heading('💰 1. Valorización de Cartera y Facturación Proyectada', level=1)
     t_fin = dash_doc.add_table(rows=2, cols=2)
     t_fin.style = 'Table Grid'
+    
     t_fin.rows[0].cells[0].text = "Ingreso Efectivo Facturable (Caja)"
     t_fin.rows[0].cells[1].text = "Valor Potencial Traccionado (WIP)"
     formatear_cabecera_tabla(t_fin, "003366")
     
     celda_caja = t_fin.rows[1].cells[0]
     celda_caja.text = f"{uf_facturables_caja:,.2f} UF"
-    celda_caja.paragraphs[0].runs[0].font.size = Pt(16)
+    celda_caja.paragraphs[0].runs[0].font.size = Pt(22)
     celda_caja.paragraphs[0].runs[0].font.bold = True
+    celda_caja.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
     celda_caja.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     celda_wip = t_fin.rows[1].cells[1]
     celda_wip.text = f"{uf_traccionadas_wip:,.2f} UF"
-    celda_wip.paragraphs[0].runs[0].font.size = Pt(16)
+    celda_wip.paragraphs[0].runs[0].font.size = Pt(22)
     celda_wip.paragraphs[0].runs[0].font.bold = True
+    celda_wip.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
     celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     dash_doc.add_paragraph("")
     
-    # Tabla KPIs con Gráficos Plotly
-    dash_doc.add_heading('2. Métricas de Cumplimiento y Carga Operativa', level=2)
+    # 2. Tabla KPIs con Gráficos Plotly
+    dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
@@ -1210,44 +1214,46 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         
     dash_doc.add_paragraph("")
 
-    # Tabla MCL
+    # 3. Tabla MCL
     if not df_mcl_mostrar.empty:
-        dash_doc.add_heading('Radar de Casos MCL', level=2)
+        dash_doc.add_heading('🏆 Radar de Casos MCL', level=1)
         t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl_mostrar.columns))
         t_mcl.style = 'Table Grid'
         columnas_mcl = list(df_mcl_mostrar.columns)
         for i, col_name in enumerate(columnas_mcl):
             t_mcl.rows[0].cells[i].text = str(col_name)
         formatear_cabecera_tabla(t_mcl, "D9534F")
+        
         for row_val in df_mcl_mostrar.values.tolist():
             row_cells = t_mcl.add_row().cells
             for i, val in enumerate(row_val):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
     
-    # Tabla Entregables
+    # 4. Tabla Entregables
     if not df_mostrar.empty:
-        dash_doc.add_heading('3. Inventario de Producción (Entregables)', level=2)
+        dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
         t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
         t_ent.style = 'Table Grid'
         for i, col_name in enumerate(df_mostrar.columns):
             t_ent.rows[0].cells[i].text = str(col_name)
         formatear_cabecera_tabla(t_ent, "28A745")
+        
         for row_val in df_mostrar.values.tolist():
             row_cells = t_ent.add_row().cells
             for i, val in enumerate(row_val):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
         
-    # Tablas Comerciales y Admin
-    dash_doc.add_heading('4. Gestión Estratégica Transversal', level=2)
+    # 5. Tablas Comerciales y Admin
+    dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
     if not df_com.empty:
-        dash_doc.add_paragraph("Gestiones Comerciales:", style='List Bullet')
+        dash_doc.add_paragraph("🔵 Gestiones Comerciales:", style='List Bullet')
         for _, row in df_com.iterrows():
             dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
     
     if not df_adm.empty:
-        dash_doc.add_paragraph("Gestiones Administrativas:", style='List Bullet')
+        dash_doc.add_paragraph("⚪ Gestiones Administrativas:", style='List Bullet')
         for _, row in df_adm.iterrows():
             dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
 
@@ -1272,7 +1278,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # ---------------------------------------------------------
@@ -1288,18 +1293,27 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
     st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Urgencias y Gestión.")
     
     op_doc = Document()
-    op_doc.add_heading(f'Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
+    op_doc.add_heading(f'📋 Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
     
     if not ajustadores_validos:
         st.warning("No se pudo cargar la lista de ajustadores desde la Base Maestra.")
     else:
         for ajustador in ajustadores_validos:
-            op_doc.add_heading(f"{ajustador}", level=1)
+            op_doc.add_heading(f"👤 {ajustador}", level=1)
             
             if df_week.empty:
                 st.markdown(f"#### 👤 {ajustador}")
                 st.markdown("<h4 style='color:#fff; background-color:#d9534f; padding:15px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN</h4>", unsafe_allow_html=True)
-                op_doc.add_paragraph("🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA", style='Intense Quote')
+                
+                # Alerta VIP en Word
+                t_alerta = op_doc.add_table(rows=1, cols=1)
+                celda_alerta = t_alerta.rows[0].cells[0]
+                celda_alerta.text = "🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA"
+                formatear_cabecera_tabla(t_alerta, "D9534F")
+                celda_alerta.paragraphs[0].runs[0].font.size = Pt(14)
+                celda_alerta.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                op_doc.add_paragraph("")
+                
                 st.markdown("---")
                 continue
             
@@ -1308,10 +1322,15 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
             
             if df_aj.empty:
                 st.markdown("<h4 style='color:#fff; background-color:#d9534f; padding:15px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN</h4>", unsafe_allow_html=True)
-                parrafo_alerta = op_doc.add_paragraph("🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA")
-                run_alert = parrafo_alerta.runs[0]
-                run_alert.font.bold = True
-                run_alert.font.color.rgb = RGBColor(217, 83, 79)
+                
+                # Alerta VIP en Word
+                t_alerta = op_doc.add_table(rows=1, cols=1)
+                celda_alerta = t_alerta.rows[0].cells[0]
+                celda_alerta.text = "🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA"
+                formatear_cabecera_tabla(t_alerta, "D9534F")
+                celda_alerta.paragraphs[0].runs[0].font.size = Pt(14)
+                celda_alerta.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                op_doc.add_paragraph("")
             else:
                 df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
                 
@@ -1351,30 +1370,31 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                 fig_adh_op = crear_velocimetro(adh_aj, "Adherencia")
                 fig_pro_op = crear_velocimetro(rat_prog, "Proactivo")
                 
-                # BLINDAJE DE KEYS PLOTLY ÚNICOS
                 c_op1, c_op2 = st.columns(2)
                 with c_op1: 
                     st.plotly_chart(fig_adh_op, use_container_width=True, key=f"op_adh_{ajustador}_{target_week_id}")
                 with c_op2: 
                     st.plotly_chart(fig_pro_op, use_container_width=True, key=f"op_pro_{ajustador}_{target_week_id}")
                 
-                # Render Word Report Financiero
+                # Render Word Report Financiero VIP
                 t_fin_op = op_doc.add_table(rows=2, cols=2)
                 t_fin_op.style = 'Table Grid'
-                t_fin_op.rows[0].cells[0].text = "Facturación Lograda (Caja)"
-                t_fin_op.rows[0].cells[1].text = "Esfuerzo en Proceso (WIP)"
+                t_fin_op.rows[0].cells[0].text = "💰 Facturación Lograda (Caja)"
+                t_fin_op.rows[0].cells[1].text = "📈 Esfuerzo en Proceso (WIP)"
                 formatear_cabecera_tabla(t_fin_op, "003366")
                 
                 celda_caja_op = t_fin_op.rows[1].cells[0]
                 celda_caja_op.text = f"{uf_caja_aj:,.2f} UF"
-                celda_caja_op.paragraphs[0].runs[0].font.size = Pt(14)
+                celda_caja_op.paragraphs[0].runs[0].font.size = Pt(20)
                 celda_caja_op.paragraphs[0].runs[0].font.bold = True
+                celda_caja_op.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
                 celda_caja_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 
                 celda_wip_op = t_fin_op.rows[1].cells[1]
                 celda_wip_op.text = f"{uf_wip_aj:,.2f} UF"
-                celda_wip_op.paragraphs[0].runs[0].font.size = Pt(14)
+                celda_wip_op.paragraphs[0].runs[0].font.size = Pt(20)
                 celda_wip_op.paragraphs[0].runs[0].font.bold = True
+                celda_wip_op.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
                 celda_wip_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 op_doc.add_paragraph("")
                 
@@ -1413,7 +1433,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         st.markdown("**✅ Trabajo Programado Realizado:**")
                         st.dataframe(df_prog_view, use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('Trabajo Programado Realizado:', level=3)
+                        op_doc.add_heading('✅ Trabajo Programado Realizado:', level=3)
                         t_prog_w = op_doc.add_table(rows=1, cols=4)
                         t_prog_w.style = 'Table Grid'
                         
@@ -1422,7 +1442,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         t_prog_w.rows[0].cells[2].text = "Acción"
                         t_prog_w.rows[0].cells[3].text = "Hon UF"
                         
-                        formatear_cabecera_tabla(t_prog_w, "003366")
+                        formatear_cabecera_tabla(t_prog_w, "28A745") # Verde oscuro corporativo
                         
                         for r_v in df_prog_view.values.tolist():
                             r_c = t_prog_w.add_row().cells
@@ -1433,6 +1453,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                                 r_c[3].text = f"{float(r_v[3]):,.2f}"
                             except:
                                 r_c[3].text = "0.00"
+                        op_doc.add_paragraph("")
                     
                     # Urgencias
                     if t_np > 0:
@@ -1440,19 +1461,20 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
                         st.dataframe(df_np_view, use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('Urgencias Reportadas:', level=3)
+                        op_doc.add_heading('🔴 Urgencias Reportadas:', level=3)
                         t_ur = op_doc.add_table(rows=1, cols=4)
                         t_ur.style = 'Table Grid'
                         
                         for i, col in enumerate(df_np_view.columns): 
                             t_ur.rows[0].cells[i].text = str(col).capitalize()
                             
-                        formatear_cabecera_tabla(t_ur, "D9534F")
+                        formatear_cabecera_tabla(t_ur, "D9534F") # Rojo alerta
                         
                         for r_v in df_np_view.values.tolist():
                             r_c = t_ur.add_row().cells
                             for i, v in enumerate(r_v): 
                                 r_c[i].text = str(v)
+                        op_doc.add_paragraph("")
                     
                     # Gestiones Estratégicas
                     cond_estr_aj = (df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])) & (~df_aj_realizado['accion'].isin(['0', ' ', '', 0]))
@@ -1462,14 +1484,14 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         st.markdown("**🔵 Gestiones Comerciales y Administrativas:**")
                         st.dataframe(df_estr[['categoria', 'accion']], use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('Gestión Estratégica:', level=3)
+                        op_doc.add_heading('🔵 Gestión Estratégica Transversal:', level=3)
                         t_est_w = op_doc.add_table(rows=1, cols=2)
                         t_est_w.style = 'Table Grid'
                         
                         t_est_w.rows[0].cells[0].text = "Categoría"
                         t_est_w.rows[0].cells[1].text = "Acción / Detalle"
                         
-                        formatear_cabecera_tabla(t_est_w, "17A2B8")
+                        formatear_cabecera_tabla(t_est_w, "17A2B8") # Azul claro / Info
                         
                         for _, r in df_estr.iterrows():
                             r_c = t_est_w.add_row().cells
@@ -1581,7 +1603,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         section.left_margin = Cm(1.27)
         section.right_margin = Cm(1.27)
 
-        doc.add_heading(f'Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
+        doc.add_heading(f'📊 Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
         
         headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "S", "D", "Hon UF"]
         table = doc.add_table(rows=1, cols=len(headers_word))
