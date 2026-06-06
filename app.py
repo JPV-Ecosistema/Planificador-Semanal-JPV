@@ -1117,28 +1117,35 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         st.info("Aún no se han ejecutado entregables de valor (Informes o Presentaciones) esta semana.")
     st.markdown("---")
     
-    # --- 4. GESTIÓN ESTRATÉGICA DESTACADA ---
+    # --- 4. GESTIÓN ESTRATÉGICA DESTACADA (NUEVO FORMATO CON FECHAS) ---
     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #ffc107;"><h4>🤝 Cuadrante 4: Gestión Estratégica Transversal</h4></div>', unsafe_allow_html=True)
     
-    cond_comercial = (df_realizados['categoria'] == 'Gestión Comercial') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))
-    df_com = df_realizados[cond_comercial][['Ajustador', 'accion']]
+    # Procesamiento de Gestión Comercial
+    df_com_raw = df_realizados[(df_realizados['categoria'] == 'Gestión Comercial') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))].copy()
+    df_com = pd.DataFrame()
+    if not df_com_raw.empty:
+        df_com_raw['Fecha'] = pd.to_datetime(df_com_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
+        df_com = df_com_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle de la Gestión'})
     
-    cond_admin = (df_realizados['categoria'] == 'Gestión Administrativa') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))
-    df_adm = df_realizados[cond_admin][['Ajustador', 'accion']]
+    # Procesamiento de Gestión Administrativa
+    df_adm_raw = df_realizados[(df_realizados['categoria'] == 'Gestión Administrativa') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))].copy()
+    df_adm = pd.DataFrame()
+    if not df_adm_raw.empty:
+        df_adm_raw['Fecha'] = pd.to_datetime(df_adm_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
+        df_adm = df_adm_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle / Comités'})
     
     col_com, col_adm = st.columns(2)
     with col_com:
         st.markdown(f"<div style='background-color:#e6f2ff; padding:15px; border-radius:8px; border-left: 4px solid #004a99;'><h5 style='color:#004a99; margin-top:0;'>Reuniones Comerciales ({len(df_com)})</h5></div>", unsafe_allow_html=True)
         if not df_com.empty:
-            df_com_mostrar = df_com.rename(columns={'accion': 'Detalle de la Gestión'})
-            st.dataframe(df_com_mostrar, use_container_width=True, hide_index=True)
+            st.dataframe(df_com, use_container_width=True, hide_index=True)
         else:
             st.caption("Sin gestiones comerciales válidas reportadas.")
+            
     with col_adm:
         st.markdown(f"<div style='background-color:#f8f9fa; padding:15px; border-radius:8px; border-left: 4px solid #6c757d;'><h5 style='color:#6c757d; margin-top:0;'>Gestiones Administrativas ({len(df_adm)})</h5></div>", unsafe_allow_html=True)
         if not df_adm.empty:
-            df_adm_mostrar = df_adm.rename(columns={'accion': 'Detalle / Comités'})
-            st.dataframe(df_adm_mostrar, use_container_width=True, hide_index=True)
+            st.dataframe(df_adm, use_container_width=True, hide_index=True)
         else:
             st.caption("Sin gestiones administrativas válidas reportadas.")
             
@@ -1159,7 +1166,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     excel_dash_buffer = io.BytesIO()
     dash_wb.save(excel_dash_buffer)
 
-    # DOCUMENTO WORD - DISEÑO TIPO DASHBOARD
+    # --- DOCUMENTO WORD - DISEÑO TIPO DASHBOARD ---
     dash_doc = Document()
     dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
@@ -1245,17 +1252,40 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
         
-    # 5. Tablas Comerciales y Admin
+    # 5. Tablas Comerciales y Admin (Reemplazo de Bullets por Tablas Estilizadas)
     dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
+    
     if not df_com.empty:
-        dash_doc.add_paragraph("🔵 Gestiones Comerciales:", style='List Bullet')
+        dash_doc.add_heading('🔵 Gestiones Comerciales', level=2)
+        t_com_w = dash_doc.add_table(rows=1, cols=3)
+        t_com_w.style = 'Table Grid'
+        t_com_w.rows[0].cells[0].text = "Fecha"
+        t_com_w.rows[0].cells[1].text = "Ajustador"
+        t_com_w.rows[0].cells[2].text = "Detalle de la Gestión"
+        formatear_cabecera_tabla(t_com_w, "004A99") # Azul corporativo
+        
         for _, row in df_com.iterrows():
-            dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
+            row_cells = t_com_w.add_row().cells
+            row_cells[0].text = str(row['Fecha'])
+            row_cells[1].text = str(row['Ajustador'])
+            row_cells[2].text = str(row['Detalle de la Gestión'])
+        dash_doc.add_paragraph("")
     
     if not df_adm.empty:
-        dash_doc.add_paragraph("⚪ Gestiones Administrativas:", style='List Bullet')
+        dash_doc.add_heading('⚪ Gestiones Administrativas', level=2)
+        t_adm_w = dash_doc.add_table(rows=1, cols=3)
+        t_adm_w.style = 'Table Grid'
+        t_adm_w.rows[0].cells[0].text = "Fecha"
+        t_adm_w.rows[0].cells[1].text = "Ajustador"
+        t_adm_w.rows[0].cells[2].text = "Detalle / Comités"
+        formatear_cabecera_tabla(t_adm_w, "6C757D") # Gris corporativo
+        
         for _, row in df_adm.iterrows():
-            dash_doc.add_paragraph(f"{row['Ajustador']}: {row['accion']}")
+            row_cells = t_adm_w.add_row().cells
+            row_cells[0].text = str(row['Fecha'])
+            row_cells[1].text = str(row['Ajustador'])
+            row_cells[2].text = str(row['Detalle / Comités'])
+        dash_doc.add_paragraph("")
 
     word_dash_buffer = io.BytesIO()
     dash_doc.save(word_dash_buffer)
@@ -1278,6 +1308,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # ---------------------------------------------------------
