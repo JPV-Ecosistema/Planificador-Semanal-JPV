@@ -1333,7 +1333,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     
     st.markdown("### 📋 Radiografía Operacional por Ajustador")
-    st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Urgencias y Gestión.")
+    st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Tareas No Programadas y Gestión.")
     
     op_doc = Document()
     op_doc.add_heading(f'📋 Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
@@ -1341,7 +1341,12 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
     if not ajustadores_validos:
         st.warning("No se pudo cargar la lista de ajustadores desde la Base Maestra.")
     else:
-        for ajustador in ajustadores_validos:
+        for i, ajustador in enumerate(ajustadores_validos):
+            
+            # --- SALTO DE PÁGINA: FICHA INDIVIDUAL POR AJUSTADOR ---
+            if i > 0:
+                op_doc.add_page_break()
+                
             op_doc.add_heading(f"👤 {ajustador}", level=1)
             
             if df_week.empty:
@@ -1446,14 +1451,14 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                 t_kpi_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 
                 try:
-                    img_adh_op_bytes = fig_adh_op.to_image(format="png", width=400, height=250)
+                    img_adh_op_bytes = fig_adh_op.to_image(format="png", width=400, height=250, engine="kaleido")
                     celda_img_adh_op = t_kpi_op.rows[0].cells[0]
                     parrafo_adh_op = celda_img_adh_op.paragraphs[0]
                     run_adh_op = parrafo_adh_op.add_run()
                     run_adh_op.add_picture(io.BytesIO(img_adh_op_bytes), width=Cm(7.5))
                     parrafo_adh_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     
-                    img_pro_op_bytes = fig_pro_op.to_image(format="png", width=400, height=250)
+                    img_pro_op_bytes = fig_pro_op.to_image(format="png", width=400, height=250, engine="kaleido")
                     celda_img_pro_op = t_kpi_op.rows[0].cells[1]
                     parrafo_pro_op = celda_img_pro_op.paragraphs[0]
                     run_pro_op = parrafo_pro_op.add_run()
@@ -1476,7 +1481,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         st.markdown("**✅ Trabajo Programado Realizado:**")
                         st.dataframe(df_prog_view, use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('✅ Trabajo Programado Realizado:', level=3)
+                        op_doc.add_heading('✅ Trabajo Programado Realizado:', level=2)
                         t_prog_w = op_doc.add_table(rows=1, cols=4)
                         t_prog_w.style = 'Table Grid'
                         
@@ -1498,13 +1503,13 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                                 r_c[3].text = "0.00"
                         op_doc.add_paragraph("")
                     
-                    # Urgencias
+                    # Tareas No Programadas (Urgencias)
                     if t_np > 0:
-                        st.markdown("**🔴 Detalle de Carga No Programada (Urgencias):**")
+                        st.markdown("**🔴 Detalle de Tareas No Programadas:**")
                         df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
                         st.dataframe(df_np_view, use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('🔴 Urgencias Reportadas:', level=3)
+                        op_doc.add_heading('🔴 Tareas No Programadas:', level=2)
                         t_ur = op_doc.add_table(rows=1, cols=4)
                         t_ur.style = 'Table Grid'
                         
@@ -1527,7 +1532,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         st.markdown("**🔵 Gestiones Comerciales y Administrativas:**")
                         st.dataframe(df_estr[['categoria', 'accion']], use_container_width=True, hide_index=True)
                         
-                        op_doc.add_heading('🔵 Gestión Estratégica Transversal:', level=3)
+                        op_doc.add_heading('🔵 Gestión Estratégica Transversal:', level=2)
                         t_est_w = op_doc.add_table(rows=1, cols=2)
                         t_est_w.style = 'Table Grid'
                         
@@ -1555,6 +1560,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
         type="primary"
     )
+
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
