@@ -5,4 +5,4 @@ python-docx
 gspread
 google-auth
 plotly
-kaleido
+kaleido==0.1.0.post1
