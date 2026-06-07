@@ -1007,7 +1007,8 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
     return df_week, df_raw, ajustadores_validos
 
 # ---------------------------------------------------------
-# BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI) - PLAN A (NATIVO WORD)
+# BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
+# VERSIÓN: 4.3.1 (Reintegración de Velocímetros Kaleido en Word)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1166,7 +1167,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     excel_dash_buffer = io.BytesIO()
     dash_wb.save(excel_dash_buffer)
 
-    # DOCUMENTO WORD - DISEÑO TIPO DASHBOARD (NATIVO, SIN KALEIDO)
+    # --- DOCUMENTO WORD - DISEÑO TIPO DASHBOARD ---
     dash_doc = Document()
     dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
@@ -1194,44 +1195,32 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     dash_doc.add_paragraph("")
     
-    # 2. Tabla KPIs NATIVA (Tarjetas de Rendimiento en lugar de Imágenes)
+    # 2. Tabla KPIs con Gráficos Plotly
     dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
+    t_kpi = dash_doc.add_table(rows=1, cols=2)
+    t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    # Lógica de colores nativos
-    color_adh = "28A745" if adherencia >= 80 else ("F0AD4E" if adherencia > 50 else "D9534F")
-    color_pro = "28A745" if ratio_plan >= 80 else ("F0AD4E" if ratio_plan > 50 else "D9534F")
-    
-    t_kpi = dash_doc.add_table(rows=2, cols=2)
-    t_kpi.style = 'Table Grid'
-    
-    t_kpi.rows[0].cells[0].text = "Adherencia al Plan"
-    t_kpi.rows[0].cells[1].text = "Ratio Planificado"
-    
-    # Colorear Cabeceras
-    shading_adh = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_adh))
-    t_kpi.rows[0].cells[0]._tc.get_or_add_tcPr().append(shading_adh)
-    t_kpi.rows[0].cells[0].paragraphs[0].runs[0].font.bold = True
-    t_kpi.rows[0].cells[0].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
-    t_kpi.rows[0].cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    shading_pro = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_pro))
-    t_kpi.rows[0].cells[1]._tc.get_or_add_tcPr().append(shading_pro)
-    t_kpi.rows[0].cells[1].paragraphs[0].runs[0].font.bold = True
-    t_kpi.rows[0].cells[1].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
-    t_kpi.rows[0].cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Insertar los números gigantes en la segunda fila
-    celda_val_adh = t_kpi.rows[1].cells[0]
-    celda_val_adh.text = f"{adherencia:.1f}%"
-    celda_val_adh.paragraphs[0].runs[0].font.size = Pt(28)
-    celda_val_adh.paragraphs[0].runs[0].font.bold = True
-    celda_val_adh.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    celda_val_pro = t_kpi.rows[1].cells[1]
-    celda_val_pro.text = f"{ratio_plan:.1f}%"
-    celda_val_pro.paragraphs[0].runs[0].font.size = Pt(28)
-    celda_val_pro.paragraphs[0].runs[0].font.bold = True
-    celda_val_pro.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    try:
+        img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+        celda_img_adh = t_kpi.rows[0].cells[0]
+        parrafo_adh = celda_img_adh.paragraphs[0]
+        run_adh = parrafo_adh.add_run()
+        run_adh.add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+        parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+        celda_img_pro = t_kpi.rows[0].cells[1]
+        parrafo_pro = celda_img_pro.paragraphs[0]
+        run_pro = parrafo_pro.add_run()
+        run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+        parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    except Exception:
+        # Fallback a texto en caso de error de Kaleido
+        celda_img_adh = t_kpi.rows[0].cells[0]
+        celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
+        celda_img_pro = t_kpi.rows[0].cells[1]
+        celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
+        
     dash_doc.add_paragraph("")
 
     # 3. Tabla MCL
@@ -1321,6 +1310,8 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
+
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # ---------------------------------------------------------
