@@ -1564,7 +1564,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.1 (Control de Cumplimiento Dinámico por Fecha de Corte)
+# VERSIÓN: 4.5.2 (Encabezados repetidos, Agrupación de casos y Leyenda de atrasos)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1594,7 +1594,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
 
-        df_operativa = df_operativa.sort_values(by=['Ajustador', 'fecha_compromiso'])
+        df_operativa = df_operativa.sort_values(by=['Ajustador', 'numero_caso', 'fecha_compromiso'])
         df_gantt_visual = df_operativa.pivot_table(
             index=['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'estado_proyectado'], 
             columns='fecha_compromiso', 
@@ -1656,9 +1656,36 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         doc.add_heading(f'📊 Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
         
+        # --- LEYENDA DE COLORES EN WORD ---
+        leyenda = doc.add_paragraph()
+        run_g = leyenda.add_run("🟢 Verde con ✔: ")
+        run_g.bold = True
+        leyenda.add_run("Ejecutado a tiempo   |   ")
+        
+        run_y = leyenda.add_run("🟡 Amarillo con ✔: ")
+        run_y.bold = True
+        leyenda.add_run("Ejecutado con atraso   |   ")
+        
+        run_r = leyenda.add_run("🔴 Rojo con X: ")
+        run_r.bold = True
+        leyenda.add_run("No ejecutado   |   ")
+        
+        run_p = leyenda.add_run("🟩 Verde vacío: ")
+        run_p.bold = True
+        leyenda.add_run("Programado (Futuro)")
+        
+        leyenda.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph("")
+        
         headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "S", "D", "Hon UF"]
         table = doc.add_table(rows=1, cols=len(headers_word))
         table.style = 'Table Grid'
+        
+        # --- REPETIR ENCABEZADOS EN CADA PÁGINA ---
+        tr = table.rows[0]._tr
+        trPr = tr.get_or_add_trPr()
+        tblHeader = parse_xml(r'<w:tblHeader {} w:val="true"/>'.format(nsdecls('w')))
+        trPr.append(tblHeader)
         
         for i, title in enumerate(headers_word):
             table.rows[0].cells[i].text = title
@@ -1669,20 +1696,33 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             table.rows[0].cells[i]._tc.get_or_add_tcPr().append(shading_elm)
             
         ajustador_previo = ""
+        caso_previo = ""
+        
         for _, row_data in df_operativa.iterrows():
             row_cells = table.add_row().cells
             ajustador_actual = str(row_data['Ajustador'])
+            caso_actual = str(row_data['numero_caso'])
             
+            # --- AGRUPACIÓN DE FILAS PARA LIMPIEZA VISUAL ---
             if ajustador_actual == ajustador_previo:
                 row_cells[0].text = ""
+                if caso_actual == caso_previo:
+                    row_cells[1].text = ""
+                    row_cells[2].text = ""
+                    row_cells[3].text = ""
+                else:
+                    row_cells[1].text = caso_actual
+                    row_cells[2].text = str(row_data['Nick Name'])
+                    row_cells[3].text = str(row_data['asegurado'])
             else:
                 row_cells[0].text = ajustador_actual
+                row_cells[1].text = caso_actual
+                row_cells[2].text = str(row_data['Nick Name'])
+                row_cells[3].text = str(row_data['asegurado'])
                 
             ajustador_previo = ajustador_actual
+            caso_previo = caso_actual
             
-            row_cells[1].text = str(row_data['numero_caso'])
-            row_cells[2].text = str(row_data['Nick Name'])
-            row_cells[3].text = str(row_data['asegurado'])
             row_cells[4].text = str(row_data['accion'])
             
             try:
@@ -1693,15 +1733,31 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 es_semana_pasada = (week_id_obj != "Semana Actual")
                 fecha_tarea_date = fecha_comp_dt.date()
                 estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
+                fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
                 
                 if es_semana_pasada or (fecha_tarea_date < hoy):
                     if estado_cumplimiento == 'Realizado':
                         row_cells[col_idx].text = "✔"
-                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                        
+                        # Evaluar Atraso
+                        es_atrasada = False
+                        if fecha_ejec_str.strip() != '' and fecha_ejec_str.strip() != 'nan':
+                            try:
+                                fecha_ejec_dt = pd.to_datetime(fecha_ejec_str).date()
+                                if fecha_ejec_dt > fecha_tarea_date:
+                                    es_atrasada = True
+                            except:
+                                pass
+                                
+                        if es_atrasada:
+                            shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w'))) # Amarillo
+                        else:
+                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
                     else:
                         row_cells[col_idx].text = "X"
-                        shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w')))
+                        shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w'))) # Rojo
                 else:
+                    # Futuro / Programado (Verde sin marca)
                     row_cells[col_idx].text = ""
                     shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
                     
