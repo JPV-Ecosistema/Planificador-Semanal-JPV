@@ -1008,7 +1008,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.1 (Reintegración de Velocímetros Kaleido en Word)
+# VERSIÓN: 4.3.2 (Aislamiento de Kaleido y Rastreo de Errores)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1021,6 +1021,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
+    import time
     
     if df_week.empty:
         st.info("No hay datos cargados para generar el Dashboard en esta semana.")
@@ -1067,6 +1068,20 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     
     fig_adh_dash = crear_velocimetro(adherencia, "Adherencia al Plan")
     fig_pro_dash = crear_velocimetro(ratio_plan, "Ratio Planificado")
+    
+    # --- AISLAMIENTO DE KALEIDO PARA EXPORTACIÓN ---
+    # Convertimos los gráficos a bytes aquí mismo para poder detectar si el error es de Kaleido o de Word
+    imagenes_exitosas = False
+    error_kaleido = ""
+    try:
+        # Añadimos un pequeño sleep para evitar saturación del motor de Chrome en Streamlit
+        time.sleep(0.5) 
+        img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+        img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+        imagenes_exitosas = True
+    except Exception as e:
+        error_kaleido = str(e)
+        st.error(f"🚨 Diagnóstico Kaleido (Resumen Ejecutivo): {error_kaleido}")
     
     c_kpi1, c_kpi2 = st.columns(2)
     with c_kpi1: 
@@ -1200,22 +1215,27 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    try:
-        img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-        celda_img_adh = t_kpi.rows[0].cells[0]
-        parrafo_adh = celda_img_adh.paragraphs[0]
-        run_adh = parrafo_adh.add_run()
-        run_adh.add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
-        parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-        celda_img_pro = t_kpi.rows[0].cells[1]
-        parrafo_pro = celda_img_pro.paragraphs[0]
-        run_pro = parrafo_pro.add_run()
-        run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
-        parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    except Exception:
-        # Fallback a texto en caso de error de Kaleido
+    if imagenes_exitosas:
+        try:
+            celda_img_adh = t_kpi.rows[0].cells[0]
+            parrafo_adh = celda_img_adh.paragraphs[0]
+            run_adh = parrafo_adh.add_run()
+            run_adh.add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+            parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            celda_img_pro = t_kpi.rows[0].cells[1]
+            parrafo_pro = celda_img_pro.paragraphs[0]
+            run_pro = parrafo_pro.add_run()
+            run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+            parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        except Exception as err_word:
+            st.error(f"🚨 Diagnóstico Word (Resumen Ejecutivo): {err_word}")
+            celda_img_adh = t_kpi.rows[0].cells[0]
+            celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
+            celda_img_pro = t_kpi.rows[0].cells[1]
+            celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
+    else:
+        # Fallback si falló Kaleido al principio
         celda_img_adh = t_kpi.rows[0].cells[0]
         celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
         celda_img_pro = t_kpi.rows[0].cells[1]
