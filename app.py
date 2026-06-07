@@ -1577,6 +1577,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
+    from datetime import datetime
 
     if df_week.empty:
         st.info("No hay tareas operativas planificadas aún para esta semana.")
@@ -1686,7 +1687,25 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             try:
                 fecha_comp_dt = pd.to_datetime(row_data['fecha_compromiso'])
                 col_idx = 5 + fecha_comp_dt.weekday()
-                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                
+                hoy = datetime.now().date()
+                es_semana_pasada = (week_id_obj != "Semana Actual")
+                fecha_tarea_date = fecha_comp_dt.date()
+                estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
+                
+                # Evalúa si la tarea es de la semana pasada, o si siendo de esta semana, es de un día anterior a hoy.
+                if es_semana_pasada or (fecha_tarea_date < hoy):
+                    if estado_cumplimiento == 'Realizado':
+                        row_cells[col_idx].text = "✔"
+                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                    else:
+                        row_cells[col_idx].text = "X"
+                        shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w')))
+                else:
+                    # Tarea de hoy o futuro: no se evalúa el cumplimiento, solo se pinta como planificada
+                    row_cells[col_idx].text = ""
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                    
                 row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
             except: 
                 pass
