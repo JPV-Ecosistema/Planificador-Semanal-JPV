@@ -1008,7 +1008,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.2 (Aislamiento de Kaleido y Rastreo de Errores)
+# VERSIÓN: 4.3.3 (Kaleido Cold-Start Fix & Bucle de Reintento)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1068,20 +1068,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     
     fig_adh_dash = crear_velocimetro(adherencia, "Adherencia al Plan")
     fig_pro_dash = crear_velocimetro(ratio_plan, "Ratio Planificado")
-    
-    # --- AISLAMIENTO DE KALEIDO PARA EXPORTACIÓN ---
-    # Convertimos los gráficos a bytes aquí mismo para poder detectar si el error es de Kaleido o de Word
-    imagenes_exitosas = False
-    error_kaleido = ""
-    try:
-        # Añadimos un pequeño sleep para evitar saturación del motor de Chrome en Streamlit
-        time.sleep(0.5) 
-        img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-        img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-        imagenes_exitosas = True
-    except Exception as e:
-        error_kaleido = str(e)
-        st.error(f"🚨 Diagnóstico Kaleido (Resumen Ejecutivo): {error_kaleido}")
     
     c_kpi1, c_kpi2 = st.columns(2)
     with c_kpi1: 
@@ -1215,7 +1201,20 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    if imagenes_exitosas:
+    img_adh_bytes = None
+    img_pro_bytes = None
+    
+    # MOTOR ANTI COLD-START: Bucle de calentamiento para Kaleido
+    # Kaleido falla en su primera ejecución porque Chrome tarda en abrir. Le damos 3 intentos.
+    for intento in range(3):
+        try:
+            img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+            img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
+            break  # Si tiene éxito, sale del bucle inmediatamente
+        except Exception:
+            time.sleep(1.5) # Le damos 1.5 segundos a Chrome para despertar e intentamos de nuevo
+            
+    if img_adh_bytes and img_pro_bytes:
         try:
             celda_img_adh = t_kpi.rows[0].cells[0]
             parrafo_adh = celda_img_adh.paragraphs[0]
@@ -1228,14 +1227,13 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             run_pro = parrafo_pro.add_run()
             run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
             parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        except Exception as err_word:
-            st.error(f"🚨 Diagnóstico Word (Resumen Ejecutivo): {err_word}")
+        except Exception:
             celda_img_adh = t_kpi.rows[0].cells[0]
             celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
             celda_img_pro = t_kpi.rows[0].cells[1]
             celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
     else:
-        # Fallback si falló Kaleido al principio
+        # Fallback si fracasan los 3 intentos
         celda_img_adh = t_kpi.rows[0].cells[0]
         celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
         celda_img_pro = t_kpi.rows[0].cells[1]
@@ -1274,7 +1272,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
         
-    # 5. Tablas Comerciales y Admin (Reemplazo de Bullets por Tablas Estilizadas)
+    # 5. Tablas Comerciales y Admin
     dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
     
     if not df_com.empty:
@@ -1330,7 +1328,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
