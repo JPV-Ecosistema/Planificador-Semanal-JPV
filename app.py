@@ -1008,7 +1008,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.3 (Kaleido Cold-Start Fix & Bucle de Reintento)
+# VERSIÓN: 4.3.4 (Arquitectura API Externa - Solución Definitiva Memoria RAM)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1021,7 +1021,9 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    import time
+    import urllib.request
+    import urllib.parse
+    import json
     
     if df_week.empty:
         st.info("No hay datos cargados para generar el Dashboard en esta semana.")
@@ -1045,7 +1047,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         st.metric("Valor Potencial Traccionado (WIP / Proceso)", f"{uf_traccionadas_wip:,.2f} UF", delta="Esfuerzo Operativo", delta_color="off")
     st.markdown("---")
     
-    # --- 2. KPIS DE CUMPLIMIENTO CON VELOCÍMETROS PLOTLY ---
+    # --- 2. KPIS DE CUMPLIMIENTO CON VELOCÍMETROS PLOTLY (PARA WEB) ---
     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #17a2b8;"><h4>⏱️ Cuadrante 2: Métricas de Cumplimiento y Carga Operativa</h4></div>', unsafe_allow_html=True)
     
     t_planificadas = len(df_week[df_week['tipo_actividad'] == 'Programada'])
@@ -1172,7 +1174,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     dash_doc = Document()
     dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
-    # 1. Tabla Financiera VIP (Formato Tarjeta)
+    # 1. Tabla Financiera VIP
     dash_doc.add_heading('💰 1. Valorización de Cartera y Facturación Proyectada', level=1)
     t_fin = dash_doc.add_table(rows=2, cols=2)
     t_fin.style = 'Table Grid'
@@ -1196,48 +1198,67 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     dash_doc.add_paragraph("")
     
-    # 2. Tabla KPIs con Gráficos Plotly
+    # 2. Tabla KPIs (MOTOR API EXTERNA - CERO CONSUMO RAM)
     dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    img_adh_bytes = None
-    img_pro_bytes = None
-    
-    # MOTOR ANTI COLD-START: Bucle de calentamiento para Kaleido
-    # Kaleido falla en su primera ejecución porque Chrome tarda en abrir. Le damos 3 intentos.
-    for intento in range(3):
+    def obtener_imagen_api(valor, titulo):
+        color = "#28a745" if valor >= 80 else ("#f0ad4e" if valor >= 50 else "#d9534f")
+        v_seguro = min(max(valor, 0), 100)
+        
+        config = {
+            "type": "doughnut",
+            "data": {
+                "datasets": [{
+                    "data": [round(v_seguro, 1), round(100 - v_seguro, 1)],
+                    "backgroundColor": [color, "#e0e0e0"],
+                    "borderWidth": 0
+                }]
+            },
+            "options": {
+                "rotation": 3.14159,
+                "circumference": 3.14159,
+                "cutoutPercentage": 75,
+                "plugins": {
+                    "datalabels": {"display": False},
+                    "doughnutlabel": {
+                        "labels": [{"text": f"{round(v_seguro, 1)}%", "font": {"size": 25, "weight": "bold"}}]
+                    }
+                },
+                "title": {"display": True, "text": titulo, "fontSize": 18, "fontColor": "#003366"}
+            }
+        }
+        url = "https://quickchart.io/chart?c=" + urllib.parse.quote(json.dumps(config)) + "&w=400&h=250"
         try:
-            img_adh_bytes = fig_adh_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-            img_pro_bytes = fig_pro_dash.to_image(format="png", width=400, height=250, engine="kaleido")
-            break  # Si tiene éxito, sale del bucle inmediatamente
-        except Exception:
-            time.sleep(1.5) # Le damos 1.5 segundos a Chrome para despertar e intentamos de nuevo
-            
-    if img_adh_bytes and img_pro_bytes:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                return response.read()
+        except:
+            return None
+
+    img_adh_api = obtener_imagen_api(adherencia, "Adherencia al Plan")
+    img_pro_api = obtener_imagen_api(ratio_plan, "Ratio Planificado")
+
+    if img_adh_api and img_pro_api:
         try:
             celda_img_adh = t_kpi.rows[0].cells[0]
             parrafo_adh = celda_img_adh.paragraphs[0]
             run_adh = parrafo_adh.add_run()
-            run_adh.add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+            run_adh.add_picture(io.BytesIO(img_adh_api), width=Cm(7.5))
             parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
             
             celda_img_pro = t_kpi.rows[0].cells[1]
             parrafo_pro = celda_img_pro.paragraphs[0]
             run_pro = parrafo_pro.add_run()
-            run_pro.add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+            run_pro.add_picture(io.BytesIO(img_pro_api), width=Cm(7.5))
             parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
         except Exception:
-            celda_img_adh = t_kpi.rows[0].cells[0]
-            celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
-            celda_img_pro = t_kpi.rows[0].cells[1]
-            celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
+            t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
+            t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
     else:
-        # Fallback si fracasan los 3 intentos
-        celda_img_adh = t_kpi.rows[0].cells[0]
-        celda_img_adh.text = f"Adherencia: {adherencia:.1f}%"
-        celda_img_pro = t_kpi.rows[0].cells[1]
-        celda_img_pro.text = f"Ratio Planificado: {ratio_plan:.1f}%"
+        t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
+        t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
         
     dash_doc.add_paragraph("")
 
@@ -1328,7 +1349,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # ---------------------------------------------------------
