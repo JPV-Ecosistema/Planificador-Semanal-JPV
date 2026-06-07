@@ -1564,6 +1564,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
+# VERSIÓN: 4.5.1 (Control de Cumplimiento Dinámico por Fecha de Corte)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1693,7 +1694,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 fecha_tarea_date = fecha_comp_dt.date()
                 estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
                 
-                # Evalúa si la tarea es de la semana pasada, o si siendo de esta semana, es de un día anterior a hoy.
                 if es_semana_pasada or (fecha_tarea_date < hoy):
                     if estado_cumplimiento == 'Realizado':
                         row_cells[col_idx].text = "✔"
@@ -1702,7 +1702,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                         row_cells[col_idx].text = "X"
                         shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w')))
                 else:
-                    # Tarea de hoy o futuro: no se evalúa el cumplimiento, solo se pinta como planificada
                     row_cells[col_idx].text = ""
                     shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
                     
