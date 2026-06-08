@@ -1345,7 +1345,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
 
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
-# VERSIÓN: 4.4.1 (Motor Nativo Matplotlib integrado)
+# VERSIÓN: 4.4.2 (Filtro de Ajustador Inteligente)
 # ---------------------------------------------------------
 def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj):
     import io
@@ -1356,257 +1356,58 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     
     st.markdown("### 📋 Radiografía Operacional por Ajustador")
-    st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Tareas No Programadas y Gestión.")
-    
     op_doc = Document()
-    op_doc.add_heading(f'📋 Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
+    op_doc.add_heading(f'📋 Reporte Operacional - {week_id_obj}', 0)
     
-    if not ajustadores_validos:
-        st.warning("No se pudo cargar la lista de ajustadores desde la Base Maestra.")
-    else:
-        for i, ajustador in enumerate(ajustadores_validos):
-            
-            # --- SALTO DE PÁGINA: FICHA INDIVIDUAL POR AJUSTADOR ---
-            if i > 0:
-                op_doc.add_page_break()
-                
-            op_doc.add_heading(f"👤 {ajustador}", level=1)
-            
-            if df_week.empty:
-                st.markdown(f"#### 👤 {ajustador}")
-                st.markdown("<h4 style='color:#fff; background-color:#d9534f; padding:15px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN</h4>", unsafe_allow_html=True)
-                
-                # Alerta VIP en Word
-                t_alerta = op_doc.add_table(rows=1, cols=1)
-                celda_alerta = t_alerta.rows[0].cells[0]
-                celda_alerta.text = "🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA"
-                formatear_cabecera_tabla(t_alerta, "D9534F")
-                celda_alerta.paragraphs[0].runs[0].font.size = Pt(14)
-                celda_alerta.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                op_doc.add_paragraph("")
-                
-                st.markdown("---")
-                continue
-            
-            df_aj = df_week[df_week['Ajustador'] == ajustador].copy()
-            st.markdown(f"#### 👤 {ajustador}")
-            
-            if df_aj.empty:
-                st.markdown("<h4 style='color:#fff; background-color:#d9534f; padding:15px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN</h4>", unsafe_allow_html=True)
-                
-                t_alerta = op_doc.add_table(rows=1, cols=1)
-                celda_alerta = t_alerta.rows[0].cells[0]
-                celda_alerta.text = "🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA"
-                formatear_cabecera_tabla(t_alerta, "D9534F")
-                celda_alerta.paragraphs[0].runs[0].font.size = Pt(14)
-                celda_alerta.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                op_doc.add_paragraph("")
-            else:
-                df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
-                
-                cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-                uf_caja_aj = df_aj_realizado[cond_fac_aj]['honorarios_estimados'].sum()
-                
-                cond_wip_aj = (df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)
-                uf_wip_aj = df_aj_realizado[cond_wip_aj]['honorarios_estimados'].sum()
-                
-                t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
-                t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
-                t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'])
-                
-                if t_prog > 0:
-                    adh_aj = (t_prog_hechas / t_prog) * 100
-                else:
-                    adh_aj = 0
-                    
-                total_aj = t_prog_hechas + t_np
-                
-                if total_aj > 0:
-                    rat_prog = (t_prog_hechas / total_aj) * 100
-                    rat_np = (t_np / total_aj) * 100
-                else:
-                    rat_prog = 0
-                    rat_np = 0
-                
-                colA, colB = st.columns(2)
-                with colA:
-                    st.metric("Facturación Lograda (UF)", f"{uf_caja_aj:,.2f}")
-                with colB:
-                    st.metric("Esfuerzo en Proceso (UF)", f"{uf_wip_aj:,.2f}")
-                
-                fig_adh_op = crear_velocimetro(adh_aj, "Adherencia")
-                fig_pro_op = crear_velocimetro(rat_prog, "Proactivo")
-                
-                c_op1, c_op2 = st.columns(2)
-                with c_op1: 
-                    st.plotly_chart(fig_adh_op, use_container_width=True, key=f"op_adh_{ajustador}_{target_week_id}")
-                with c_op2: 
-                    st.plotly_chart(fig_pro_op, use_container_width=True, key=f"op_pro_{ajustador}_{target_week_id}")
-                
-                t_fin_op = op_doc.add_table(rows=2, cols=2)
-                t_fin_op.style = 'Table Grid'
-                t_fin_op.rows[0].cells[0].text = "💰 Facturación Lograda (Caja)"
-                t_fin_op.rows[0].cells[1].text = "📈 Esfuerzo en Proceso (WIP)"
-                formatear_cabecera_tabla(t_fin_op, "003366")
-                
-                celda_caja_op = t_fin_op.rows[1].cells[0]
-                celda_caja_op.text = f"{uf_caja_aj:,.2f} UF"
-                celda_caja_op.paragraphs[0].runs[0].font.size = Pt(20)
-                celda_caja_op.paragraphs[0].runs[0].font.bold = True
-                celda_caja_op.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
-                celda_caja_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                
-                celda_wip_op = t_fin_op.rows[1].cells[1]
-                celda_wip_op.text = f"{uf_wip_aj:,.2f} UF"
-                celda_wip_op.paragraphs[0].runs[0].font.size = Pt(20)
-                celda_wip_op.paragraphs[0].runs[0].font.bold = True
-                celda_wip_op.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
-                celda_wip_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                op_doc.add_paragraph("")
-                
-                # MOTOR MATPLOTLIB OFFLINE PARA REPORTE OPERACIONAL
-                t_kpi_op = op_doc.add_table(rows=1, cols=2)
-                t_kpi_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if df_week.empty:
+        st.warning(f"No hay datos encontrados para el periodo seleccionado ({week_id_obj}).")
+        return
 
-                def generar_velocimetro_estatico(valor, titulo):
-                    import numpy as np
-                    import matplotlib.pyplot as plt
-                    import matplotlib.patches as patches
-                    valor_seguro = min(max(float(valor), 0.0), 100.0)
-                    fig, ax = plt.subplots(figsize=(5, 3.2))
-                    center, radius, width = (0, 0), 1.0, 0.3
-                    
-                    def draw_wedge(start, end, color):
-                        wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
-                        ax.add_patch(wedge)
-                        
-                    draw_wedge(90, 180, '#d9534f')
-                    draw_wedge(36, 90, '#f0ad4e')
-                    draw_wedge(0, 36, '#28a745')
-
-                    angle_progress = 180 - (valor_seguro * 1.8)
-                    theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
-                    r_line = radius - (width / 2)
-                    ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
-
-                    for t in [0, 20, 40, 60, 80, 100]:
-                        ang = np.radians(180 - t * 1.8)
-                        ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
-                        ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
-
-                    ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
-                    ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
-                    ax.set_xlim(-1.3, 1.3)
-                    ax.set_ylim(-0.1, 1.4)
-                    ax.axis('off')
-
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
-                    plt.close(fig)
-                    return buf.getvalue()
-                
-                try:
-                    img_adh_op_bytes = generar_velocimetro_estatico(adh_aj, "Adherencia")
-                    celda_img_adh_op = t_kpi_op.rows[0].cells[0]
-                    celda_img_adh_op.paragraphs[0].add_run().add_picture(io.BytesIO(img_adh_op_bytes), width=Cm(7.5))
-                    celda_img_adh_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    
-                    img_pro_op_bytes = generar_velocimetro_estatico(rat_prog, "Proactivo")
-                    celda_img_pro_op = t_kpi_op.rows[0].cells[1]
-                    celda_img_pro_op.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_op_bytes), width=Cm(7.5))
-                    celda_img_pro_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                except Exception:
-                    celda_img_adh_op = t_kpi_op.rows[0].cells[0]
-                    celda_img_adh_op.text = f"Adherencia: {adh_aj:.1f}%"
-                    celda_img_pro_op = t_kpi_op.rows[0].cells[1]
-                    celda_img_pro_op.text = f"Proactivo: {rat_prog:.1f}%"
-                    
-                op_doc.add_paragraph("")
-                
-                with st.expander(f"Ver desglose operativo detallado"):
-                    
-                    df_prog_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'][['numero_caso', 'asegurado', 'accion', 'honorarios_estimados']]
-                    if not df_prog_view.empty:
-                        st.markdown("**✅ Trabajo Programado Realizado:**")
-                        st.dataframe(df_prog_view, use_container_width=True, hide_index=True)
-                        
-                        op_doc.add_heading('✅ Trabajo Programado Realizado:', level=2)
-                        t_prog_w = op_doc.add_table(rows=1, cols=4)
-                        t_prog_w.style = 'Table Grid'
-                        
-                        t_prog_w.rows[0].cells[0].text = "Caso"
-                        t_prog_w.rows[0].cells[1].text = "Asegurado"
-                        t_prog_w.rows[0].cells[2].text = "Acción"
-                        t_prog_w.rows[0].cells[3].text = "Hon UF"
-                        
-                        formatear_cabecera_tabla(t_prog_w, "28A745") 
-                        
-                        for r_v in df_prog_view.values.tolist():
-                            r_c = t_prog_w.add_row().cells
-                            r_c[0].text = str(r_v[0])
-                            r_c[1].text = str(r_v[1])
-                            r_c[2].text = str(r_v[2])
-                            try:
-                                r_c[3].text = f"{float(r_v[3]):,.2f}"
-                            except:
-                                r_c[3].text = "0.00"
-                        op_doc.add_paragraph("")
-                    
-                    if t_np > 0:
-                        st.markdown("**🔴 Detalle de Tareas No Programadas:**")
-                        df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
-                        st.dataframe(df_np_view, use_container_width=True, hide_index=True)
-                        
-                        op_doc.add_heading('🔴 Tareas No Programadas:', level=2)
-                        t_ur = op_doc.add_table(rows=1, cols=4)
-                        t_ur.style = 'Table Grid'
-                        
-                        for i, col in enumerate(df_np_view.columns): 
-                            t_ur.rows[0].cells[i].text = str(col).capitalize()
-                            
-                        formatear_cabecera_tabla(t_ur, "D9534F") 
-                        
-                        for r_v in df_np_view.values.tolist():
-                            r_c = t_ur.add_row().cells
-                            for i, v in enumerate(r_v): 
-                                r_c[i].text = str(v)
-                        op_doc.add_paragraph("")
-                    
-                    cond_estr_aj = (df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])) & (~df_aj_realizado['accion'].isin(['0', ' ', '', 0]))
-                    df_estr = df_aj_realizado[cond_estr_aj]
-                    
-                    if not df_estr.empty:
-                        st.markdown("**🔵 Gestiones Comerciales y Administrativas:**")
-                        st.dataframe(df_estr[['categoria', 'accion']], use_container_width=True, hide_index=True)
-                        
-                        op_doc.add_heading('🔵 Gestión Estratégica Transversal:', level=2)
-                        t_est_w = op_doc.add_table(rows=1, cols=2)
-                        t_est_w.style = 'Table Grid'
-                        
-                        t_est_w.rows[0].cells[0].text = "Categoría"
-                        t_est_w.rows[0].cells[1].text = "Acción / Detalle"
-                        
-                        formatear_cabecera_tabla(t_est_w, "17A2B8") 
-                        
-                        for _, r in df_estr.iterrows():
-                            r_c = t_est_w.add_row().cells
-                            r_c[0].text = str(r['categoria'])
-                            r_c[1].text = str(r['accion'])
-                            
-                op_doc.add_paragraph("")
-            st.markdown("---")
+    for ajustador in ajustadores_validos:
+        # Filtro flexible: ignora mayúsculas y espacios extra
+        df_aj = df_week[df_week['Ajustador'].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()].copy()
+        
+        op_doc.add_heading(f"👤 {ajustador}", level=1)
+        st.markdown(f"#### 👤 {ajustador}")
+        
+        if df_aj.empty:
+            st.info(f"Sin actividades registradas para este ajustador en {week_id_obj}.")
+            op_doc.add_paragraph("Sin actividad registrada.")
+        else:
+            df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
             
-    # --- BOTONES DE DESCARGA OPERACIONAL ---
-    st.markdown("### Exportar Reporte Operacional")
-    word_op_buffer = io.BytesIO()
-    op_doc.save(word_op_buffer)
-    st.download_button(
-        label="📥 DESCARGAR REPORTE OPERACIONAL (WORD)", 
-        data=word_op_buffer.getvalue(), 
-        file_name=f"Reporte_Operacional_{target_week_id}.docx", 
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
-        type="primary"
-    )
+            # --- CÁLCULOS ---
+            cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final|Carta de Cobertura', case=False, na=False)
+            uf_caja_aj = df_aj_realizado[cond_fac_aj]['honorarios_estimados'].sum()
+            uf_wip_aj = df_aj_realizado[(df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)]['honorarios_estimados'].sum()
+            
+            # Mostrar UI
+            c1, c2 = st.columns(2)
+            c1.metric("Facturación (Caja)", f"{uf_caja_aj:,.2f} UF")
+            c2.metric("Esfuerzo (WIP)", f"{uf_wip_aj:,.2f} UF")
+            
+            # Gráficos (usando el nuevo motor matplotlib)
+            t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
+            t_prog_h = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
+            adh = (t_prog_h / t_prog * 100) if t_prog > 0 else 0
+            
+            c3, c4 = st.columns(2)
+            with c3: st.plotly_chart(crear_velocimetro(adh, "Adherencia"), use_container_width=True)
+            
+            # Generar Word
+            t_fin = op_doc.add_table(rows=2, cols=2)
+            t_fin.style = 'Table Grid'
+            t_fin.rows[0].cells[0].text = "Facturación Lograda"
+            t_fin.rows[0].cells[1].text = "Esfuerzo WIP"
+            formatear_cabecera_tabla(t_fin, "003366")
+            t_fin.rows[1].cells[0].text = f"{uf_caja_aj:,.2f} UF"
+            t_fin.rows[1].cells[1].text = f"{uf_wip_aj:,.2f} UF"
+            op_doc.add_paragraph("")
+            
+        op_doc.add_page_break()
+
+    st.download_button("📥 DESCARGAR REPORTE OPERACIONAL (WORD)", op_doc.save_buffer_hack(), f"Reporte_{target_week_id}.docx")
+
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
@@ -1912,6 +1713,58 @@ def vista_reportes():
     with tab_operacional:
         renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
         
+    with tab_gantt:
+        renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)# ---------------------------------------------------------
+# BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
+# VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
+# ---------------------------------------------------------
+def vista_reportes():
+    import streamlit as st
+    from datetime import datetime, timedelta
+    
+    st.title("📊 Tablero de Control y Planificación")
+    
+    col_radio, col_btn = st.columns([2, 1])
+    with col_radio:
+        week_id_obj = st.radio(
+            "Seleccione la semana a reportar:", 
+            ["Semana Pasada", "Semana Actual", "Próxima Semana"], 
+            index=1,
+            horizontal=True
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
+
+    if week_id_obj == "Semana Pasada":
+        offset = -1
+    elif week_id_obj == "Semana Actual":
+        offset = 0
+    else:
+        offset = 1
+        
+    hoy = datetime.now()
+    # Calculamos la fecha base del periodo seleccionado
+    fecha_referencia = hoy + timedelta(weeks=offset)
+    # Obtenemos el lunes de esa semana
+    lunes = fecha_referencia - timedelta(days=fecha_referencia.weekday())
+    dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
+        
+    target_week_id = get_week_identifier(offset)
+
+    # 4.2 Llamada al motor de datos
+    df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
+
+    tab_dashboard, tab_operacional, tab_gantt = st.tabs([
+        "📈 Dashboard Ejecutivo (BI)", 
+        "📋 Reporte Operacional de Equipo", 
+        "📊 Carta Gantt Operativa"
+    ])
+    
+    with tab_dashboard:
+        renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
+    with tab_operacional:
+        renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
     with tab_gantt:
         renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
 
