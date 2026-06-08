@@ -1008,7 +1008,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.4 (Arquitectura API Externa - Solución Definitiva Memoria RAM)
+# VERSIÓN: 4.3.5 (Renderizado Plotly vía API Externa)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1022,7 +1022,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
     import urllib.request
-    import urllib.parse
     import json
     
     if df_week.empty:
@@ -1198,47 +1197,57 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     dash_doc.add_paragraph("")
     
-    # 2. Tabla KPIs (MOTOR API EXTERNA - CERO CONSUMO RAM)
+    # 2. Tabla KPIs (MOTOR API EXTERNA - RENDERING NATIVO PLOTLY)
     dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    def obtener_imagen_api(valor, titulo):
-        color = "#28a745" if valor >= 80 else ("#f0ad4e" if valor >= 50 else "#d9534f")
+    def obtener_imagen_plotly_api(valor, titulo):
         v_seguro = min(max(valor, 0), 100)
         
-        config = {
-            "type": "doughnut",
-            "data": {
-                "datasets": [{
-                    "data": [round(v_seguro, 1), round(100 - v_seguro, 1)],
-                    "backgroundColor": [color, "#e0e0e0"],
-                    "borderWidth": 0
-                }]
-            },
-            "options": {
-                "rotation": 3.14159,
-                "circumference": 3.14159,
-                "cutoutPercentage": 75,
-                "plugins": {
-                    "datalabels": {"display": False},
-                    "doughnutlabel": {
-                        "labels": [{"text": f"{round(v_seguro, 1)}%", "font": {"size": 25, "weight": "bold"}}]
+        # Este payload JSON es exactamente el mismo código que usa go.Indicator de Plotly
+        payload = {
+            "data": [
+                {
+                    "type": "indicator",
+                    "mode": "gauge+number",
+                    "value": v_seguro,
+                    "title": {"text": titulo, "font": {"size": 18, "color": "#003366"}},
+                    "number": {"suffix": "%", "font": {"size": 26, "color": "black", "weight": "bold"}},
+                    "gauge": {
+                        "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "black"},
+                        "bar": {"color": "black", "thickness": 0.15},
+                        "bgcolor": "white",
+                        "borderwidth": 2,
+                        "bordercolor": "gray",
+                        "steps": [
+                            {"range": [0, 50], "color": "#d9534f"},
+                            {"range": [50, 80], "color": "#f0ad4e"},
+                            {"range": [80, 100], "color": "#28a745"}
+                        ]
                     }
-                },
-                "title": {"display": True, "text": titulo, "fontSize": 18, "fontColor": "#003366"}
+                }
+            ],
+            "layout": {
+                "width": 400,
+                "height": 250,
+                "margin": {"l": 20, "r": 20, "t": 50, "b": 20}
             }
         }
-        url = "https://quickchart.io/chart?c=" + urllib.parse.quote(json.dumps(config)) + "&w=400&h=250"
+        
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=5) as response:
+            req = urllib.request.Request(
+                "https://quickchart.io/plotly", 
+                data=json.dumps(payload).encode('utf-8'), 
+                headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
                 return response.read()
         except:
             return None
 
-    img_adh_api = obtener_imagen_api(adherencia, "Adherencia al Plan")
-    img_pro_api = obtener_imagen_api(ratio_plan, "Ratio Planificado")
+    img_adh_api = obtener_imagen_plotly_api(adherencia, "Adherencia al Plan")
+    img_pro_api = obtener_imagen_plotly_api(ratio_plan, "Ratio Planificado")
 
     if img_adh_api and img_pro_api:
         try:
