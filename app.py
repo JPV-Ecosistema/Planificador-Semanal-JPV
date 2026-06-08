@@ -1848,6 +1848,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
 # ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
+# VERSIÓN: 4.0.1 (Inclusión de Histórico Retroactivo - Semana Pasada)
 # ---------------------------------------------------------
 def vista_reportes():
     import streamlit as st
@@ -1860,15 +1861,22 @@ def vista_reportes():
     with col_radio:
         week_id_obj = st.radio(
             "Seleccione la semana a reportar:", 
-            ["Semana Actual", "Próxima Semana"], 
+            ["Semana Pasada", "Semana Actual", "Próxima Semana"], 
+            index=1,
             horizontal=True
         )
     with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
         forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
 
-    offset = 0 if week_id_obj == "Semana Actual" else 1
-    
+    # Lógica de asignación de desplazamiento para cálculo de fechas
+    if week_id_obj == "Semana Pasada":
+        offset = -1
+    elif week_id_obj == "Semana Actual":
+        offset = 0
+    else:
+        offset = 1
+        
     hoy = datetime.now()
     target_date = hoy + timedelta(weeks=offset)
     lunes = target_date - timedelta(days=target_date.weekday())
@@ -1882,7 +1890,7 @@ def vista_reportes():
     # 4.2 Llamada al motor de datos
     df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
 
-    # Pestañas
+    # Pestañas de Navegación Gerencial
     tab_dashboard, tab_operacional, tab_gantt = st.tabs([
         "📈 Dashboard Ejecutivo (BI)", 
         "📋 Reporte Operacional de Equipo", 
