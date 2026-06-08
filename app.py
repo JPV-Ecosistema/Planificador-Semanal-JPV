@@ -1008,7 +1008,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.5 (Renderizado Plotly vía API Externa)
+# VERSIÓN: 4.3.6 (Motor Nativo Matplotlib - Cero Colapsos de RAM)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1021,8 +1021,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    import urllib.request
-    import json
     
     if df_week.empty:
         st.info("No hay datos cargados para generar el Dashboard en esta semana.")
@@ -1197,75 +1195,60 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     dash_doc.add_paragraph("")
     
-    # 2. Tabla KPIs (MOTOR API EXTERNA - RENDERING NATIVO PLOTLY)
+    # 2. Tabla KPIs (MOTOR MATPLOTLIB OFFLINE)
     dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
     t_kpi = dash_doc.add_table(rows=1, cols=2)
     t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    def obtener_imagen_plotly_api(valor, titulo):
-        v_seguro = min(max(valor, 0), 100)
+    def generar_velocimetro_estatico(valor, titulo):
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        valor_seguro = min(max(float(valor), 0.0), 100.0)
+        fig, ax = plt.subplots(figsize=(5, 3.2))
+        center, radius, width = (0, 0), 1.0, 0.3
         
-        # Este payload JSON es exactamente el mismo código que usa go.Indicator de Plotly
-        payload = {
-            "data": [
-                {
-                    "type": "indicator",
-                    "mode": "gauge+number",
-                    "value": v_seguro,
-                    "title": {"text": titulo, "font": {"size": 18, "color": "#003366"}},
-                    "number": {"suffix": "%", "font": {"size": 26, "color": "black", "weight": "bold"}},
-                    "gauge": {
-                        "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "black"},
-                        "bar": {"color": "black", "thickness": 0.15},
-                        "bgcolor": "white",
-                        "borderwidth": 2,
-                        "bordercolor": "gray",
-                        "steps": [
-                            {"range": [0, 50], "color": "#d9534f"},
-                            {"range": [50, 80], "color": "#f0ad4e"},
-                            {"range": [80, 100], "color": "#28a745"}
-                        ]
-                    }
-                }
-            ],
-            "layout": {
-                "width": 400,
-                "height": 250,
-                "margin": {"l": 20, "r": 20, "t": 50, "b": 20}
-            }
-        }
-        
-        try:
-            req = urllib.request.Request(
-                "https://quickchart.io/plotly", 
-                data=json.dumps(payload).encode('utf-8'), 
-                headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                return response.read()
-        except:
-            return None
-
-    img_adh_api = obtener_imagen_plotly_api(adherencia, "Adherencia al Plan")
-    img_pro_api = obtener_imagen_plotly_api(ratio_plan, "Ratio Planificado")
-
-    if img_adh_api and img_pro_api:
-        try:
-            celda_img_adh = t_kpi.rows[0].cells[0]
-            parrafo_adh = celda_img_adh.paragraphs[0]
-            run_adh = parrafo_adh.add_run()
-            run_adh.add_picture(io.BytesIO(img_adh_api), width=Cm(7.5))
-            parrafo_adh.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        def draw_wedge(start, end, color):
+            wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
+            ax.add_patch(wedge)
             
-            celda_img_pro = t_kpi.rows[0].cells[1]
-            parrafo_pro = celda_img_pro.paragraphs[0]
-            run_pro = parrafo_pro.add_run()
-            run_pro.add_picture(io.BytesIO(img_pro_api), width=Cm(7.5))
-            parrafo_pro.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        except Exception:
-            t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
-            t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
-    else:
+        draw_wedge(90, 180, '#d9534f')
+        draw_wedge(36, 90, '#f0ad4e')
+        draw_wedge(0, 36, '#28a745')
+
+        angle_progress = 180 - (valor_seguro * 1.8)
+        theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
+        r_line = radius - (width / 2)
+        ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
+
+        for t in [0, 20, 40, 60, 80, 100]:
+            ang = np.radians(180 - t * 1.8)
+            ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
+            ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
+
+        ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
+        ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
+        ax.set_xlim(-1.3, 1.3)
+        ax.set_ylim(-0.1, 1.4)
+        ax.axis('off')
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+        plt.close(fig)
+        return buf.getvalue()
+
+    try:
+        img_adh_bytes = generar_velocimetro_estatico(adherencia, "Adherencia al Plan")
+        celda_img_adh = t_kpi.rows[0].cells[0]
+        celda_img_adh.paragraphs[0].add_run().add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+        celda_img_adh.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        img_pro_bytes = generar_velocimetro_estatico(ratio_plan, "Ratio Planificado")
+        celda_img_pro = t_kpi.rows[0].cells[1]
+        celda_img_pro.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+        celda_img_pro.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    except Exception as e:
+        st.error(f"Error gráfico local: {e}")
         t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
         t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
         
@@ -1358,8 +1341,11 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
+
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
+# VERSIÓN: 4.4.1 (Motor Nativo Matplotlib integrado)
 # ---------------------------------------------------------
 def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj):
     import io
@@ -1408,7 +1394,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
             if df_aj.empty:
                 st.markdown("<h4 style='color:#fff; background-color:#d9534f; padding:15px; border-radius:5px; text-align:center;'>🚨 AJUSTADOR SIN PLAN</h4>", unsafe_allow_html=True)
                 
-                # Alerta VIP en Word
                 t_alerta = op_doc.add_table(rows=1, cols=1)
                 celda_alerta = t_alerta.rows[0].cells[0]
                 celda_alerta.text = "🚨 AJUSTADOR SIN PLAN REPORTADO ESTA SEMANA"
@@ -1419,14 +1404,12 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
             else:
                 df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
                 
-                # Finanzas
                 cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
                 uf_caja_aj = df_aj_realizado[cond_fac_aj]['honorarios_estimados'].sum()
                 
                 cond_wip_aj = (df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)
                 uf_wip_aj = df_aj_realizado[cond_wip_aj]['honorarios_estimados'].sum()
                 
-                # KPIs
                 t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
                 t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
                 t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'])
@@ -1445,7 +1428,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                     rat_prog = 0
                     rat_np = 0
                 
-                # Render UI
                 colA, colB = st.columns(2)
                 with colA:
                     st.metric("Facturación Lograda (UF)", f"{uf_caja_aj:,.2f}")
@@ -1461,7 +1443,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                 with c_op2: 
                     st.plotly_chart(fig_pro_op, use_container_width=True, key=f"op_pro_{ajustador}_{target_week_id}")
                 
-                # Render Word Report Financiero VIP
                 t_fin_op = op_doc.add_table(rows=2, cols=2)
                 t_fin_op.style = 'Table Grid'
                 t_fin_op.rows[0].cells[0].text = "💰 Facturación Lograda (Caja)"
@@ -1483,24 +1464,57 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                 celda_wip_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 op_doc.add_paragraph("")
                 
-                # Render Word Report Velocímetros
+                # MOTOR MATPLOTLIB OFFLINE PARA REPORTE OPERACIONAL
                 t_kpi_op = op_doc.add_table(rows=1, cols=2)
                 t_kpi_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                def generar_velocimetro_estatico(valor, titulo):
+                    import numpy as np
+                    import matplotlib.pyplot as plt
+                    import matplotlib.patches as patches
+                    valor_seguro = min(max(float(valor), 0.0), 100.0)
+                    fig, ax = plt.subplots(figsize=(5, 3.2))
+                    center, radius, width = (0, 0), 1.0, 0.3
+                    
+                    def draw_wedge(start, end, color):
+                        wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
+                        ax.add_patch(wedge)
+                        
+                    draw_wedge(90, 180, '#d9534f')
+                    draw_wedge(36, 90, '#f0ad4e')
+                    draw_wedge(0, 36, '#28a745')
+
+                    angle_progress = 180 - (valor_seguro * 1.8)
+                    theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
+                    r_line = radius - (width / 2)
+                    ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
+
+                    for t in [0, 20, 40, 60, 80, 100]:
+                        ang = np.radians(180 - t * 1.8)
+                        ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
+                        ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
+
+                    ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
+                    ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
+                    ax.set_xlim(-1.3, 1.3)
+                    ax.set_ylim(-0.1, 1.4)
+                    ax.axis('off')
+
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+                    plt.close(fig)
+                    return buf.getvalue()
                 
                 try:
-                    img_adh_op_bytes = fig_adh_op.to_image(format="png", width=400, height=250, engine="kaleido")
+                    img_adh_op_bytes = generar_velocimetro_estatico(adh_aj, "Adherencia")
                     celda_img_adh_op = t_kpi_op.rows[0].cells[0]
-                    parrafo_adh_op = celda_img_adh_op.paragraphs[0]
-                    run_adh_op = parrafo_adh_op.add_run()
-                    run_adh_op.add_picture(io.BytesIO(img_adh_op_bytes), width=Cm(7.5))
-                    parrafo_adh_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    celda_img_adh_op.paragraphs[0].add_run().add_picture(io.BytesIO(img_adh_op_bytes), width=Cm(7.5))
+                    celda_img_adh_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                     
-                    img_pro_op_bytes = fig_pro_op.to_image(format="png", width=400, height=250, engine="kaleido")
+                    img_pro_op_bytes = generar_velocimetro_estatico(rat_prog, "Proactivo")
                     celda_img_pro_op = t_kpi_op.rows[0].cells[1]
-                    parrafo_pro_op = celda_img_pro_op.paragraphs[0]
-                    run_pro_op = parrafo_pro_op.add_run()
-                    run_pro_op.add_picture(io.BytesIO(img_pro_op_bytes), width=Cm(7.5))
-                    parrafo_pro_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    celda_img_pro_op.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_op_bytes), width=Cm(7.5))
+                    celda_img_pro_op.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 except Exception:
                     celda_img_adh_op = t_kpi_op.rows[0].cells[0]
                     celda_img_adh_op.text = f"Adherencia: {adh_aj:.1f}%"
@@ -1509,10 +1523,8 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                     
                 op_doc.add_paragraph("")
                 
-                # Desglose Operativo Completo en UI y Word
                 with st.expander(f"Ver desglose operativo detallado"):
                     
-                    # Trabajo Programado
                     df_prog_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'][['numero_caso', 'asegurado', 'accion', 'honorarios_estimados']]
                     if not df_prog_view.empty:
                         st.markdown("**✅ Trabajo Programado Realizado:**")
@@ -1527,7 +1539,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         t_prog_w.rows[0].cells[2].text = "Acción"
                         t_prog_w.rows[0].cells[3].text = "Hon UF"
                         
-                        formatear_cabecera_tabla(t_prog_w, "28A745") # Verde oscuro corporativo
+                        formatear_cabecera_tabla(t_prog_w, "28A745") 
                         
                         for r_v in df_prog_view.values.tolist():
                             r_c = t_prog_w.add_row().cells
@@ -1540,7 +1552,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                                 r_c[3].text = "0.00"
                         op_doc.add_paragraph("")
                     
-                    # Tareas No Programadas (Urgencias)
                     if t_np > 0:
                         st.markdown("**🔴 Detalle de Tareas No Programadas:**")
                         df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
@@ -1553,7 +1564,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         for i, col in enumerate(df_np_view.columns): 
                             t_ur.rows[0].cells[i].text = str(col).capitalize()
                             
-                        formatear_cabecera_tabla(t_ur, "D9534F") # Rojo alerta
+                        formatear_cabecera_tabla(t_ur, "D9534F") 
                         
                         for r_v in df_np_view.values.tolist():
                             r_c = t_ur.add_row().cells
@@ -1561,7 +1572,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                                 r_c[i].text = str(v)
                         op_doc.add_paragraph("")
                     
-                    # Gestiones Estratégicas
                     cond_estr_aj = (df_aj_realizado['categoria'].isin(['Gestión Comercial', 'Gestión Administrativa'])) & (~df_aj_realizado['accion'].isin(['0', ' ', '', 0]))
                     df_estr = df_aj_realizado[cond_estr_aj]
                     
@@ -1576,7 +1586,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
                         t_est_w.rows[0].cells[0].text = "Categoría"
                         t_est_w.rows[0].cells[1].text = "Acción / Detalle"
                         
-                        formatear_cabecera_tabla(t_est_w, "17A2B8") # Azul claro / Info
+                        formatear_cabecera_tabla(t_est_w, "17A2B8") 
                         
                         for _, r in df_estr.iterrows():
                             r_c = t_est_w.add_row().cells
@@ -1597,7 +1607,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
         type="primary"
     )
-
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
