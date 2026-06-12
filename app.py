@@ -310,7 +310,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.2 (Autogestión de Reseteo Corporativo)
+# VERSIÓN: 2.3.0 (Soporte Quirúrgico de Planificación Multidía)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     col_t1, col_t2 = st.columns([2, 1])
@@ -362,9 +362,6 @@ def vista_planificador(modo="Semanal"):
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
-            # ---------------------------------------------------------
-            # MOTOR DE RESETEO DE PLANIFICACIÓN (ZONA DE CONTROL)
-            # ---------------------------------------------------------
             if modo == "Mensual":
                 _, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
             else:
@@ -385,17 +382,14 @@ def vista_planificador(modo="Semanal"):
                     st.markdown("Si cometiste un error en las fechas, tramos o asignaciones, puedes vaciar el plan actual para volver a formularlo de manera correcta.")
                     if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
                         try:
-                            # Sobreescritura atómica con lista vacía en local y nube corporativa
                             save_plan_actualizado(path_boveda, [])
                             st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
                             st.rerun()
                         except Exception as reset_err:
                             st.error(f"Error al ejecutar el reseteo: {reset_err}")
-            # ---------------------------------------------------------
 
             plan_transaccional = []
             
-            # --- LÓGICA DE HERENCIA MCL EN CASCADA POR PERÍODO MENSUAL ---
             if modo == "Semanal":
                 target_date = datetime.now() + timedelta(weeks=offset_weeks)
                 target_month_id = target_date.strftime("%Y_%m")
@@ -412,8 +406,8 @@ def vista_planificador(modo="Semanal"):
                 
                 if mcl_pendientes:
                     st.markdown("---")
-                    st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar día)</h4></div>', unsafe_allow_html=True)
-                    st.info(f"Estos compromisos provienen de tu Planificador Mensual de {target_date.strftime('%B %Y')}. Asígnales un día específico para incorporarlos a tu agenda semanal.")
+                    st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar rango)</h4></div>', unsafe_allow_html=True)
+                    st.info(f"Estos compromisos provienen de tu Planificador Mensual de {target_date.strftime('%B %Y')}. Selecciona el rango de días en que se trabajará.")
                     
                     for idx, mcl_task in enumerate(mcl_pendientes):
                         c1, c2 = st.columns([3, 1])
@@ -422,12 +416,22 @@ def vista_planificador(modo="Semanal"):
                             st.write(f"**Entregable Estratégico:** {mcl_task['accion']}")
                         with c2:
                             fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
-                            nueva_fecha_mcl = st.date_input(f"Día de ejecución:", value=fec_obj, key=f"mcl_fec_{idx}")
+                            nueva_fecha_mcl = st.date_input(f"Días de ejecución:", value=(fec_obj, fec_obj), key=f"mcl_fec_{idx}")
                             
-                        task_to_add = mcl_task.copy()
-                        task_to_add['fecha_compromiso'] = nueva_fecha_mcl.strftime("%Y-%m-%d")
-                        task_to_add['id_mcl_origen'] = mcl_task['id_transaccion'] 
-                        plan_transaccional.append(task_to_add)
+                        if isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 2:
+                            s_d, e_d = nueva_fecha_mcl
+                            delta = (e_d - s_d).days
+                            dates_list = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                        elif isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 1:
+                            dates_list = [nueva_fecha_mcl[0]]
+                        else:
+                            dates_list = [nueva_fecha_mcl]
+
+                        for dt in dates_list:
+                            task_to_add = mcl_task.copy()
+                            task_to_add['fecha_compromiso'] = dt.strftime("%Y-%m-%d")
+                            task_to_add['id_mcl_origen'] = mcl_task['id_transaccion'] 
+                            plan_transaccional.append(task_to_add)
 
             st.markdown("---")
             st.header("1. Selección de Casos Operativos Regulares")
@@ -449,7 +453,7 @@ def vista_planificador(modo="Semanal"):
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas y Proyección de Estado")
-                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado, defina la cantidad de actividades y establezca las fechas de compromiso.")
+                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado, defina la cantidad de actividades y establezca los rangos de ejecución.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -518,25 +522,35 @@ def vista_planificador(modo="Semanal"):
                                         elif sub_accion:
                                             accion_final = f"{cat_accion} - {sub_accion}"
                             with colC:
-                                fecha_compromiso = st.date_input(f"Fecha compromiso {i}:", key=f"fecha_{idx}_{i}")
+                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(datetime.now(), datetime.now()), key=f"fecha_{idx}_{i}")
                             
                             if accion_final.strip():
-                                plan_transaccional.append({
-                                    "id_transaccion": str(uuid.uuid4()),
-                                    "tipo_plan": modo,
-                                    "tipo_actividad": "Programada",
-                                    "categoria": "Operativa",
-                                    "numero_caso": str(caso_num),
-                                    "asegurado": str(asegurado),
-                                    "tramo_uf": tramo,
-                                    "honorarios_estimados": honorarios_estimados,
-                                    "estado_proyectado": estado_proyectado,
-                                    "subestado_proyectado": subestado_proyectado,
-                                    "accion": accion_final,
-                                    "fecha_compromiso": fecha_compromiso.strftime("%Y-%m-%d"),
-                                    "estado_cumplimiento": "Pendiente",
-                                    "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                })
+                                if isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 2:
+                                    s_d, e_d = fecha_compromiso_range
+                                    delta = (e_d - s_d).days
+                                    act_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                                elif isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 1:
+                                    act_dates = [fecha_compromiso_range[0]]
+                                else:
+                                    act_dates = [fecha_compromiso_range]
+
+                                for dt in act_dates:
+                                    plan_transaccional.append({
+                                        "id_transaccion": str(uuid.uuid4()),
+                                        "tipo_plan": modo,
+                                        "tipo_actividad": "Programada",
+                                        "categoria": "Operativa",
+                                        "numero_caso": str(caso_num),
+                                        "asegurado": str(asegurado),
+                                        "tramo_uf": tramo,
+                                        "honorarios_estimados": honorarios_estimados,
+                                        "estado_proyectado": estado_proyectado,
+                                        "subestado_proyectado": subestado_proyectado,
+                                        "accion": accion_final,
+                                        "fecha_compromiso": dt.strftime("%Y-%m-%d"),
+                                        "estado_cumplimiento": "Pendiente",
+                                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    })
                                 
             st.markdown("---")
             st.header("3. Acciones de Gestión")
@@ -551,17 +565,27 @@ def vista_planificador(modo="Semanal"):
                     with c_acc:
                         acc_com = st.text_input(f"Detalle gestión {i}:", placeholder="Reuniones, visitas a corredoras...", key=f"txt_com_{i}")
                     with c_fec:
-                        fec_com = st.date_input(f"Fecha {i}:", key=f"fec_com_{i}")
+                        fec_com_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_com_{i}")
                     
                     if acc_com.strip():
-                        plan_transaccional.append({
-                            "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
-                            "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
-                            "honorarios_estimados": 0.0,
-                            "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_com.strip(), 
-                            "fecha_compromiso": fec_com.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
-                            "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                        if isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 2:
+                            s_d, e_d = fec_com_range
+                            delta = (e_d - s_d).days
+                            com_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                        elif isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 1:
+                            com_dates = [fec_com_range[0]]
+                        else:
+                            com_dates = [fec_com_range]
+
+                        for dt in com_dates:
+                            plan_transaccional.append({
+                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                                "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                                "honorarios_estimados": 0.0,
+                                "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_com.strip(), 
+                                "fecha_compromiso": dt.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
+                                "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
             
             with col2:
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
@@ -572,17 +596,27 @@ def vista_planificador(modo="Semanal"):
                     with c_acc:
                         acc_adm = st.text_input(f"Detalle gestión {i}:", placeholder="Capacitaciones, comités...", key=f"txt_adm_{i}")
                     with c_fec:
-                        fec_adm = st.date_input(f"Fecha {i}:", key=f"fec_adm_{i}")
+                        fec_adm_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_adm_{i}")
                     
                     if acc_adm.strip():
-                        plan_transaccional.append({
-                            "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
-                            "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
-                            "honorarios_estimados": 0.0,
-                            "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_adm.strip(), 
-                            "fecha_compromiso": fec_adm.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
-                            "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                        if isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 2:
+                            s_d, e_d = fec_adm_range
+                            delta = (e_d - s_d).days
+                            adm_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                        elif isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 1:
+                            adm_dates = [fec_adm_range[0]]
+                        else:
+                            adm_dates = [fec_adm_range]
+
+                        for dt in adm_dates:
+                            plan_transaccional.append({
+                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                                "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
+                                "honorarios_estimados": 0.0,
+                                "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_adm.strip(), 
+                                "fecha_compromiso": dt.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
+                                "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
