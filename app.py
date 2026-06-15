@@ -310,7 +310,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.3.0 (Soporte Quirúrgico de Planificación Multidía)
+# VERSIÓN: 2.3.1 (Blindaje contra Amnesia de Servidor en Guardado)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     col_t1, col_t2 = st.columns([2, 1])
@@ -362,19 +362,11 @@ def vista_planificador(modo="Semanal"):
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
+            # SOLUCIÓN: Usamos las funciones de carga seguras que van a la nube si falla lo local
             if modo == "Mensual":
-                _, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
+                plan_historico, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
             else:
-                t_week_id = get_week_identifier(offset_weeks)
-                path_boveda = os.path.join(PERSISTENCE_DIR, f"plan_{ajustador_seleccionado.replace(' ', '_')}_{t_week_id}.json")
-            
-            plan_historico = []
-            if os.path.exists(path_boveda):
-                try:
-                    with open(path_boveda, 'r', encoding='utf-8') as f:
-                        plan_historico = json.load(f)
-                except:
-                    pass
+                plan_historico, path_boveda = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
             
             if plan_historico:
                 with st.expander("🚨 Zona de Control: Modificar / Resetear Período Activo", expanded=False):
@@ -623,24 +615,14 @@ def vista_planificador(modo="Semanal"):
                 st.info(f"Se han consolidado **{len(plan_transaccional)} acciones** en total para guardar.")
                 if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
                     try:
+                        # SOLUCIÓN: Forzamos la descarga del plan desde la nube antes de anexar la nueva data
                         if modo == "Mensual":
-                            _, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
-                            plan_existente = []
-                            if os.path.exists(filepath):
-                                with open(filepath, 'r', encoding='utf-8') as f:
-                                    plan_existente = json.load(f)
+                            plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.success(f"Plan Mensual MCL ({mes_opcion}) guardado exitosamente en la bóveda y respaldado en la nube.")
                         else:
-                            target_week_id = get_week_identifier(offset_weeks)
-                            filename = f"plan_{ajustador_seleccionado.replace(' ', '_')}_{target_week_id}.json"
-                            filepath = os.path.join(PERSISTENCE_DIR, filename)
+                            plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
                             
-                            plan_existente = []
-                            if os.path.exists(filepath):
-                                with open(filepath, 'r', encoding='utf-8') as f:
-                                    plan_existente = json.load(f)
-                                    
                             if 'mcl_data' in locals() and mcl_data:
                                 mcl_ids_agendados = [t['id_mcl_origen'] for t in plan_transaccional if 'id_mcl_origen' in t]
                                 for t in mcl_data:
