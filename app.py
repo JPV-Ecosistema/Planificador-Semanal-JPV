@@ -1663,7 +1663,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.3 (Consolidación Multidía en Fila Única)
+# VERSIÓN: 4.5.4 (Exclusión estricta de Fines de Semana)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1690,6 +1690,14 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
     
     if not df_operativa.empty:
         df_operativa['fecha_compromiso'] = pd.to_datetime(df_operativa['fecha_compromiso'], errors='coerce').dt.date
+        
+        # Filtro estricto: Expulsar cualquier tarea que caiga en Sábado (5) o Domingo (6)
+        df_operativa = df_operativa[pd.to_datetime(df_operativa['fecha_compromiso']).apply(lambda x: x.weekday() < 5)]
+        
+        if df_operativa.empty:
+            st.info("No hay tareas operativas planificadas en días hábiles para esta semana.")
+            return
+
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
 
@@ -1707,20 +1715,23 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN ---
         grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
 
+        # Aislar solo los días hábiles (Lunes a Viernes) para las columnas
+        dias_habiles_target = [d for d in dias_semana_target if d.weekday() < 5]
+
         # Exportación Excel Gantt
         wb = Workbook()
         ws = wb.active
         ws.title = "Plan Semanal Gantt"
         
         encabezados = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"]
-        for f in dias_semana_target:
+        for f in dias_habiles_target:
             encabezados.append(f.strftime('%A %d-%m'))
         encabezados.append("Hon UF")
         ws.append(encabezados)
         
         for name, group in grouped:
             row = list(name)
-            for f in dias_semana_target:
+            for f in dias_habiles_target:
                 if f in group['fecha_compromiso'].values:
                     row.append("X")
                 else:
@@ -1782,7 +1793,8 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         leyenda.alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph("")
         
-        headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "S", "D", "Hon UF"]
+        # Se remueven 'S' y 'D' de la tabla de Word
+        headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
         table = doc.add_table(rows=1, cols=len(headers_word))
         table.style = 'Table Grid'
         
@@ -1830,8 +1842,8 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             
             row_cells[4].text = str(accion)
             
-            # Pintado Horizontal de Días
-            for i_date, f_date in enumerate(dias_semana_target):
+            # Pintado Horizontal de Días (Solo Lunes a Viernes)
+            for i_date, f_date in enumerate(dias_habiles_target):
                 col_idx = 5 + i_date
                 match = group[group['fecha_compromiso'] == f_date]
                 
@@ -1873,15 +1885,15 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 else:
                     row_cells[col_idx].text = ""
             
-            # Honorarios unificados en la última celda
+            # Honorarios unificados en la última celda (Índice 10 en vez de 12 tras borrar S y D)
             try:
                 val_uf = float(group['honorarios_estimados'].max())
                 if val_uf > 0:
-                    row_cells[12].text = f"{val_uf:,.2f}"
+                    row_cells[10].text = f"{val_uf:,.2f}"
                 else:
-                    row_cells[12].text = "-"
+                    row_cells[10].text = "-"
             except: 
-                row_cells[12].text = "-"
+                row_cells[10].text = "-"
 
             for i, cell in enumerate(row_cells):
                 for paragraph in cell.paragraphs:
