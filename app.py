@@ -1663,7 +1663,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.2 (Encabezados repetidos, Agrupación de casos y Leyenda de atrasos)
+# VERSIÓN: 4.5.3 (Consolidación Multidía en Fila Única)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1704,28 +1704,34 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la división)")
         st.dataframe(df_gantt_visual, use_container_width=True)
 
+        # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN ---
+        grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
+
         # Exportación Excel Gantt
         wb = Workbook()
         ws = wb.active
         ws.title = "Plan Semanal Gantt"
-        fechas_unicas = dias_semana_target 
         
         encabezados = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"]
-        for f in fechas_unicas:
+        for f in dias_semana_target:
             encabezados.append(f.strftime('%A %d-%m'))
         encabezados.append("Hon UF")
         ws.append(encabezados)
         
-        grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
         for name, group in grouped:
             row = list(name)
-            for f in fechas_unicas:
+            for f in dias_semana_target:
                 if f in group['fecha_compromiso'].values:
                     row.append("X")
                 else:
                     row.append("")
                     
-            total_honorarios = group['honorarios_estimados'].sum()
+            try:
+                # Usamos max() para no inflar las UF si la tarea abarca varios días
+                total_honorarios = float(group['honorarios_estimados'].max())
+            except:
+                total_honorarios = 0.0
+                
             row.append(round(total_honorarios, 2))
             ws.append(row)
             
@@ -1780,7 +1786,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         table = doc.add_table(rows=1, cols=len(headers_word))
         table.style = 'Table Grid'
         
-        # --- REPETIR ENCABEZADOS EN CADA PÁGINA ---
         tr = table.rows[0]._tr
         trPr = tr.get_or_add_trPr()
         tblHeader = parse_xml(r'<w:tblHeader {} w:val="true"/>'.format(nsdecls('w')))
@@ -1796,13 +1801,14 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             
         ajustador_previo = ""
         caso_previo = ""
+        hoy = datetime.now().date()
         
-        for _, row_data in df_operativa.iterrows():
+        # ITERACIÓN INTELIGENTE (1 FILA = 1 TAREA)
+        for name, group in grouped:
+            ajustador_actual, caso_actual, nickname, asegurado, accion = name
             row_cells = table.add_row().cells
-            ajustador_actual = str(row_data['Ajustador'])
-            caso_actual = str(row_data['numero_caso'])
             
-            # --- AGRUPACIÓN DE FILAS PARA LIMPIEZA VISUAL ---
+            # Limpieza Visual (No repetir nombres ni casos seguidos)
             if ajustador_actual == ajustador_previo:
                 row_cells[0].text = ""
                 if caso_actual == caso_previo:
@@ -1810,62 +1816,66 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                     row_cells[2].text = ""
                     row_cells[3].text = ""
                 else:
-                    row_cells[1].text = caso_actual
-                    row_cells[2].text = str(row_data['Nick Name'])
-                    row_cells[3].text = str(row_data['asegurado'])
+                    row_cells[1].text = str(caso_actual)
+                    row_cells[2].text = str(nickname)
+                    row_cells[3].text = str(asegurado)
             else:
-                row_cells[0].text = ajustador_actual
-                row_cells[1].text = caso_actual
-                row_cells[2].text = str(row_data['Nick Name'])
-                row_cells[3].text = str(row_data['asegurado'])
+                row_cells[0].text = str(ajustador_actual)
+                row_cells[1].text = str(caso_actual)
+                row_cells[2].text = str(nickname)
+                row_cells[3].text = str(asegurado)
                 
             ajustador_previo = ajustador_actual
             caso_previo = caso_actual
             
-            row_cells[4].text = str(row_data['accion'])
+            row_cells[4].text = str(accion)
             
-            try:
-                fecha_comp_dt = pd.to_datetime(row_data['fecha_compromiso'])
-                col_idx = 5 + fecha_comp_dt.weekday()
+            # Pintado Horizontal de Días
+            for i_date, f_date in enumerate(dias_semana_target):
+                col_idx = 5 + i_date
+                match = group[group['fecha_compromiso'] == f_date]
                 
-                hoy = datetime.now().date()
-                es_semana_pasada = (week_id_obj != "Semana Actual")
-                fecha_tarea_date = fecha_comp_dt.date()
-                estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
-                fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
-                
-                if es_semana_pasada or (fecha_tarea_date < hoy):
-                    if estado_cumplimiento == 'Realizado':
-                        row_cells[col_idx].text = "✔"
-                        
-                        # Evaluar Atraso
-                        es_atrasada = False
-                        if fecha_ejec_str.strip() != '' and fecha_ejec_str.strip() != 'nan':
-                            try:
-                                fecha_ejec_dt = pd.to_datetime(fecha_ejec_str).date()
-                                if fecha_ejec_dt > fecha_tarea_date:
-                                    es_atrasada = True
-                            except:
-                                pass
-                                
-                        if es_atrasada:
-                            shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w'))) # Amarillo
-                        else:
-                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
-                    else:
-                        row_cells[col_idx].text = "X"
-                        shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w'))) # Rojo
-                else:
-                    # Futuro / Programado (Verde sin marca)
-                    row_cells[col_idx].text = ""
-                    shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                if not match.empty:
+                    row_data = match.iloc[0]
+                    estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
+                    fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
                     
-                row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
-            except: 
-                pass
+                    es_pasado = f_date < hoy
+                    
+                    if es_pasado:
+                        if estado_cumplimiento == 'Realizado':
+                            row_cells[col_idx].text = "✔"
+                            es_atrasada = False
+                            if pd.notna(fecha_ejec_str) and str(fecha_ejec_str).strip() not in ['', 'nan']:
+                                try:
+                                    fecha_ejec_dt = pd.to_datetime(fecha_ejec_str).date()
+                                    if fecha_ejec_dt > f_date:
+                                        es_atrasada = True
+                                except: pass
+                                
+                            if es_atrasada:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w'))) # Amarillo
+                            else:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
+                        else:
+                            row_cells[col_idx].text = "X"
+                            shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w'))) # Rojo
+                    else:
+                        # Día Actual o Futuro
+                        if estado_cumplimiento == 'Realizado':
+                            row_cells[col_idx].text = "✔"
+                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
+                        else:
+                            row_cells[col_idx].text = ""
+                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde vacío
+                            
+                    row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
+                else:
+                    row_cells[col_idx].text = ""
             
+            # Honorarios unificados en la última celda
             try:
-                val_uf = float(row_data['honorarios_estimados'])
+                val_uf = float(group['honorarios_estimados'].max())
                 if val_uf > 0:
                     row_cells[12].text = f"{val_uf:,.2f}"
                 else:
@@ -1907,6 +1917,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             )
     else:
         st.info("No hay tareas operativas (casos) planificadas aún para esta semana.")
+
 
 # ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
