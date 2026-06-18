@@ -53,7 +53,7 @@ apply_custom_styles()
 
 # ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
-# VERSIÓN: 2.1.4 (Guardián de Sesión contra Bucles 429)
+# VERSIÓN: 2.1.5 (Advertencia de Filtros en Reporte de Acciones)
 # ---------------------------------------------------------
 def get_google_client():
     try:
@@ -125,6 +125,10 @@ def load_master_base():
 
     # 4. Motor de Carga, Sanitización y Respaldo Nube
     with st.sidebar.expander("📥 Subir / Actualizar Base Maestra", expanded=necesita_actualizacion):
+        
+        # --- ADVERTENCIA ESTRATÉGICA ANTES DE CARGAR ---
+        st.warning("💡 **Requisito del Excel:** El reporte de acciones extraído del sistema debe contemplar a **todas las divisiones de la gerencia**. Antes de subirlo, verifique que no existan filtros que oculten a los ajustadores y asegúrese de **excluir** los casos en estado *Anulado* o *Cerrado*.")
+        
         uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
         if uploaded_file is not None:
             # Creamos una huella digital única para el archivo subido
@@ -179,7 +183,7 @@ def load_master_base():
                     st.session_state["ultima_base_procesada"] = file_signature
                     st.rerun() 
                 except Exception as e:
-                    st.sidebar.error(f"Error crítico al procesar el Excel: {e}")
+                    st.error(f"Error crítico al procesar el Excel: {e}")
                 
     return df_local
 
@@ -248,7 +252,6 @@ def sync_from_cloud(filename, filepath):
                         json.dump(datos_json, f, ensure_ascii=False, indent=4)
                     return datos_json
         except Exception as e:
-            # Evitamos alertas invasivas si la cuota de lectura también está retenida temporalmente
             pass
     return []
 
