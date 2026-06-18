@@ -1663,7 +1663,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.4 (Exclusión estricta de Fines de Semana)
+# VERSIÓN: 4.5.5 (Carátula de Honorarios IFL/WIP)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1709,11 +1709,45 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             aggfunc=lambda x: ' | '.join(x)
         ).fillna('')
         
-        st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la división)")
-        st.dataframe(df_gantt_visual, use_container_width=True)
-
-        # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN ---
+        # --- AGRUPACIÓN MAESTRA DE TAREAS ---
         grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
+
+        # --- CÁLCULO DE TOTALES PARA CARÁTULA (Sin duplicar multidías) ---
+        uf_ifl_total = 0.0
+        uf_wip_total = 0.0
+        
+        for name, group in grouped:
+            accion_str = str(name[4]).lower()
+            try:
+                uf_val = float(group['honorarios_estimados'].max())
+            except:
+                uf_val = 0.0
+                
+            if 'informe final de liquidación' in accion_str or 'carta de cobertura (rechazo)' in accion_str:
+                uf_ifl_total += uf_val
+            else:
+                uf_wip_total += uf_val
+
+        # --- VISUALIZACIÓN UI (STREAMLIT) ---
+        st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la división)")
+        
+        c_ui1, c_ui2 = st.columns(2)
+        with c_ui1:
+            st.markdown(f"""
+            <div style='background-color: #28a745; padding: 25px; border-radius: 8px; text-align: center; margin-bottom: 20px;'>
+                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>IFL Comprometidos de la Semana</div>
+                <div style='color: white; font-size: 30px; font-weight: bold;'>{uf_ifl_total:,.2f} UF</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c_ui2:
+            st.markdown(f"""
+            <div style='background-color: #004A99; padding: 25px; border-radius: 8px; text-align: center; margin-bottom: 20px;'>
+                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>WIP Comprometidos de la Semana</div>
+                <div style='color: white; font-size: 30px; font-weight: bold;'>{uf_wip_total:,.2f} UF</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.dataframe(df_gantt_visual, use_container_width=True)
 
         # Aislar solo los días hábiles (Lunes a Viernes) para las columnas
         dias_habiles_target = [d for d in dias_semana_target if d.weekday() < 5]
@@ -1771,6 +1805,43 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         section.right_margin = Cm(1.27)
 
         doc.add_heading(f'📊 Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
+        
+        # --- CARÁTULA INICIAL (CAJAS DE UF EN WORD) ---
+        t_caratula = doc.add_table(rows=1, cols=2)
+        t_caratula.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Celda IFL (Verde)
+        c_ifl = t_caratula.rows[0].cells[0]
+        shd_ifl = parse_xml(r'<w:shd {} w:fill="28A745"/>'.format(nsdecls('w')))
+        c_ifl._tc.get_or_add_tcPr().append(shd_ifl)
+        p_ifl = c_ifl.paragraphs[0]
+        p_ifl.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_ifl_title = p_ifl.add_run("IFL Comprometidos de la Semana\n")
+        r_ifl_title.font.color.rgb = RGBColor(255, 255, 255)
+        r_ifl_title.font.size = Pt(14)
+        r_ifl_title.font.bold = True
+        r_ifl_val = p_ifl.add_run(f"{uf_ifl_total:,.2f} UF")
+        r_ifl_val.font.color.rgb = RGBColor(255, 255, 255)
+        r_ifl_val.font.size = Pt(30)
+        r_ifl_val.font.bold = True
+        
+        # Celda WIP (Azul)
+        c_wip = t_caratula.rows[0].cells[1]
+        shd_wip = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
+        c_wip._tc.get_or_add_tcPr().append(shd_wip)
+        p_wip = c_wip.paragraphs[0]
+        p_wip.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_wip_title = p_wip.add_run("WIP Comprometidos de la Semana\n")
+        r_wip_title.font.color.rgb = RGBColor(255, 255, 255)
+        r_wip_title.font.size = Pt(14)
+        r_wip_title.font.bold = True
+        r_wip_val = p_wip.add_run(f"{uf_wip_total:,.2f} UF")
+        r_wip_val.font.color.rgb = RGBColor(255, 255, 255)
+        r_wip_val.font.size = Pt(30)
+        r_wip_val.font.bold = True
+
+        doc.add_paragraph("")
+        doc.add_paragraph("")
         
         # --- LEYENDA DE COLORES EN WORD ---
         leyenda = doc.add_paragraph()
