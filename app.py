@@ -310,9 +310,22 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.3.1 (Blindaje contra Amnesia de Servidor en Guardado)
+# VERSIÓN: 2.4.0 (Ventana de Compromiso, Feriados CL y Visibilidad)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
+    import pandas as pd
+    import json
+    import os
+    import uuid
+    from datetime import datetime, timedelta
+    
+    # Motor de feriados (Requiere añadir 'holidays' a requirements.txt)
+    try:
+        import holidays
+        feriados_cl = holidays.Chile()
+    except ImportError:
+        feriados_cl = []
+
     col_t1, col_t2 = st.columns([2, 1])
     with col_t1:
         if modo == "Semanal":
@@ -342,6 +355,21 @@ def vista_planificador(modo="Semanal"):
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
     
+    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO SEMANAL) ---
+    es_adicional = False
+    if modo == "Semanal":
+        hoy_dt = datetime.now().date()
+        target_date = datetime.now() + timedelta(weeks=offset_weeks)
+        lunes_target = target_date.date() - timedelta(days=target_date.weekday())
+        viernes_prev = lunes_target - timedelta(days=3)
+        
+        # Si hoy NO está entre el viernes anterior y el lunes objetivo, es fuera de plazo
+        if not (viernes_prev <= hoy_dt <= lunes_target):
+            es_adicional = True
+            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado. Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
+
+    tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
+
     df_maestro = load_master_base()
     
     if df_maestro is not None:
@@ -362,16 +390,22 @@ def vista_planificador(modo="Semanal"):
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
 
-            # SOLUCIÓN: Usamos las funciones de carga seguras que van a la nube si falla lo local
             if modo == "Mensual":
                 plan_historico, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
             else:
                 plan_historico, path_boveda = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
             
+            # --- VISIBILIDAD DEL PLAN VIGENTE ---
             if plan_historico:
+                with st.expander(f"📋 Ver Plan Vigente ({len(plan_historico)} acciones registradas)", expanded=True):
+                    df_ph = pd.DataFrame(plan_historico)
+                    if not df_ph.empty:
+                        df_show = df_ph[['tipo_actividad', 'categoria', 'numero_caso', 'accion', 'fecha_compromiso', 'estado_cumplimiento']].copy()
+                        df_show = df_show.rename(columns={'tipo_actividad': 'Tipo', 'categoria': 'Categoría', 'numero_caso': 'Caso', 'accion': 'Acción', 'fecha_compromiso': 'Fecha', 'estado_cumplimiento': 'Estado'})
+                        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                        
                 with st.expander("🚨 Zona de Control: Modificar / Resetear Período Activo", expanded=False):
-                    st.warning(f"Atención: Ya tienes un plan comprometido para este período con {len(plan_historico)} acciones registradas en el sistema.")
-                    st.markdown("Si cometiste un error en las fechas, tramos o asignaciones, puedes vaciar el plan actual para volver a formularlo de manera correcta.")
+                    st.markdown("Si cometiste un error crítico, puedes vaciar el plan actual completo para volver a formularlo.")
                     if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
                         try:
                             save_plan_actualizado(path_boveda, [])
@@ -382,6 +416,7 @@ def vista_planificador(modo="Semanal"):
 
             plan_transaccional = []
             
+            # --- HERENCIA MCL ---
             if modo == "Semanal":
                 target_date = datetime.now() + timedelta(weeks=offset_weeks)
                 target_month_id = target_date.strftime("%Y_%m")
@@ -399,30 +434,39 @@ def vista_planificador(modo="Semanal"):
                 if mcl_pendientes:
                     st.markdown("---")
                     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar rango)</h4></div>', unsafe_allow_html=True)
-                    st.info(f"Estos compromisos provienen de tu Planificador Mensual de {target_date.strftime('%B %Y')}. Selecciona el rango de días en que se trabajará.")
+                    st.info(f"Estos compromisos provienen de tu Planificador Mensual. Selecciona los días de ejecución (se omitirán fines de semana y feriados).")
                     
                     for idx, mcl_task in enumerate(mcl_pendientes):
                         c1, c2 = st.columns([3, 1])
                         with c1:
                             st.write(f"**Caso:** [{mcl_task['numero_caso']}] {mcl_task['asegurado']}")
-                            st.write(f"**Entregable Estratégico:** {mcl_task['accion']}")
+                            st.write(f"**Entregable:** {mcl_task['accion']}")
                         with c2:
                             fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
                             nueva_fecha_mcl = st.date_input(f"Días de ejecución:", value=(fec_obj, fec_obj), key=f"mcl_fec_{idx}")
                             
+                        act_dates = []
                         if isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 2:
                             s_d, e_d = nueva_fecha_mcl
                             delta = (e_d - s_d).days
-                            dates_list = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                            for d in range(delta + 1):
+                                dt = s_d + timedelta(days=d)
+                                # Filtro de días hábiles y feriados
+                                if dt.weekday() < 5 and dt not in feriados_cl:
+                                    act_dates.append(dt)
                         elif isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 1:
-                            dates_list = [nueva_fecha_mcl[0]]
+                            act_dates = [nueva_fecha_mcl[0]]
                         else:
-                            dates_list = [nueva_fecha_mcl]
+                            act_dates = [nueva_fecha_mcl]
 
-                        for dt in dates_list:
+                        if not act_dates: 
+                            act_dates = [s_d if 's_d' in locals() else nueva_fecha_mcl] # Paracaídas si eligen solo feriados
+
+                        for dt in act_dates:
                             task_to_add = mcl_task.copy()
                             task_to_add['fecha_compromiso'] = dt.strftime("%Y-%m-%d")
-                            task_to_add['id_mcl_origen'] = mcl_task['id_transaccion'] 
+                            task_to_add['id_mcl_origen'] = mcl_task['id_transaccion']
+                            task_to_add['tipo_actividad'] = tipo_actividad_actual
                             plan_transaccional.append(task_to_add)
 
             st.markdown("---")
@@ -445,7 +489,6 @@ def vista_planificador(modo="Semanal"):
             if selected_indices:
                 st.markdown("---")
                 st.header("2. Detalle de Acciones Operativas y Proyección de Estado")
-                st.info("💡 Valide o modifique el Estado/Sub-estado proyectado, defina la cantidad de actividades y establezca los rangos de ejecución.")
                 
                 for idx in selected_indices:
                     fila = casos_vigentes.loc[idx]
@@ -460,37 +503,28 @@ def vista_planificador(modo="Semanal"):
                         if len(casos_vigentes.columns) >= 67:
                             valor_bo = fila.iloc[66] 
                             honorarios_estimados = limpiar_monto_mcl(valor_bo)
-                    except Exception:
-                        pass
+                    except Exception: pass
                     
-                    nickname = ""
-                    if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "":
-                        nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>"
+                    nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>" if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "" else ""
                     
                     with st.container():
                         st.markdown(f"""
                         <div class="marco-caso">
                             <h4>[{caso_num}] {asegurado}{nickname}</h4>
                             <p style="color:gray; font-size: 0.9em; margin-bottom: 5px;">
-                                <b>Clasificación:</b> {tramo} | <b>Estado en Excel:</b> {estado_actual} | <b>Sub-estado en Excel:</b> {subestado_actual}
+                                <b>Clasificación:</b> {tramo} | <b>Estado Actual:</b> {estado_actual} | <b>Sub-estado Actual:</b> {subestado_actual}
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
                         
                         col_est, col_sub = st.columns(2)
                         with col_est:
-                            opts_est = estados_maestros.copy()
-                            if estado_actual not in opts_est and estado_actual != "N/D":
-                                opts_est.append(estado_actual)
-                            opts_est = sorted(list(set(opts_est)))
+                            opts_est = sorted(list(set(estados_maestros + ([estado_actual] if estado_actual != "N/D" else []))))
                             default_est_idx = opts_est.index(estado_actual) if estado_actual in opts_est else 0
                             estado_proyectado = st.selectbox(f"Proyectar Estado Final:", opts_est, index=default_est_idx, key=f"est_proj_{idx}")
                             
                         with col_sub:
-                            opts_sub = subestados_maestros.copy()
-                            if subestado_actual not in opts_sub and subestado_actual != "N/D":
-                                opts_sub.append(subestado_actual)
-                            opts_sub = sorted(list(set(opts_sub)))
+                            opts_sub = sorted(list(set(subestados_maestros + ([subestado_actual] if subestado_actual != "N/D" else []))))
                             default_sub_idx = opts_sub.index(subestado_actual) if subestado_actual in opts_sub else 0
                             subestado_proyectado = st.selectbox(f"Proyectar Sub-estado Final:", opts_sub, index=default_sub_idx, key=f"sub_proj_{idx}")
 
@@ -509,28 +543,34 @@ def vista_planificador(modo="Semanal"):
                                         sub_accion = st.selectbox(f"Detalle Acción {i}:", [""] + CATALOGO_ACCIONES[cat_accion], key=f"sub_{idx}_{i}")
                                         if sub_accion == "Otro / Manual":
                                             texto_manual = st.text_input(f"Especifique el detalle {i}:", key=f"man_{idx}_{i}")
-                                            if texto_manual:
-                                                accion_final = f"{cat_accion} - {texto_manual}"
+                                            if texto_manual: accion_final = f"{cat_accion} - {texto_manual}"
                                         elif sub_accion:
                                             accion_final = f"{cat_accion} - {sub_accion}"
                             with colC:
                                 fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(datetime.now(), datetime.now()), key=f"fecha_{idx}_{i}")
                             
                             if accion_final.strip():
+                                act_dates = []
                                 if isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 2:
                                     s_d, e_d = fecha_compromiso_range
                                     delta = (e_d - s_d).days
-                                    act_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                                    for d in range(delta + 1):
+                                        dt = s_d + timedelta(days=d)
+                                        # Colador de Fines de semana y Feriados
+                                        if dt.weekday() < 5 and dt not in feriados_cl:
+                                            act_dates.append(dt)
                                 elif isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 1:
                                     act_dates = [fecha_compromiso_range[0]]
                                 else:
                                     act_dates = [fecha_compromiso_range]
 
+                                if not act_dates: act_dates = [s_d if 's_d' in locals() else fecha_compromiso_range]
+
                                 for dt in act_dates:
                                     plan_transaccional.append({
                                         "id_transaccion": str(uuid.uuid4()),
                                         "tipo_plan": modo,
-                                        "tipo_actividad": "Programada",
+                                        "tipo_actividad": tipo_actividad_actual,
                                         "categoria": "Operativa",
                                         "numero_caso": str(caso_num),
                                         "asegurado": str(asegurado),
@@ -551,7 +591,6 @@ def vista_planificador(modo="Semanal"):
             with col1:
                 st.markdown('<div class="marco-gestion"><h4>🤝 Gestión Comercial</h4></div>', unsafe_allow_html=True)
                 num_comercial = st.number_input("Cantidad de gestiones comerciales:", min_value=0, max_value=15, value=1, key="num_comercial")
-                
                 for i in range(1, int(num_comercial) + 1):
                     c_acc, c_fec = st.columns([2, 1])
                     with c_acc:
@@ -560,29 +599,33 @@ def vista_planificador(modo="Semanal"):
                         fec_com_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_com_{i}")
                     
                     if acc_com.strip():
+                        com_dates = []
                         if isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 2:
                             s_d, e_d = fec_com_range
                             delta = (e_d - s_d).days
-                            com_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                            for d in range(delta + 1):
+                                dt = s_d + timedelta(days=d)
+                                if dt.weekday() < 5 and dt not in feriados_cl:
+                                    com_dates.append(dt)
                         elif isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 1:
                             com_dates = [fec_com_range[0]]
                         else:
                             com_dates = [fec_com_range]
 
+                        if not com_dates: com_dates = [s_d if 's_d' in locals() else fec_com_range]
+
                         for dt in com_dates:
                             plan_transaccional.append({
-                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": tipo_actividad_actual, 
                                 "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
-                                "honorarios_estimados": 0.0,
-                                "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_com.strip(), 
-                                "fecha_compromiso": dt.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
-                                "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                "honorarios_estimados": 0.0, "estado_proyectado": "N/A", "subestado_proyectado": "N/A", 
+                                "accion": acc_com.strip(), "fecha_compromiso": dt.strftime("%Y-%m-%d"), 
+                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             })
             
             with col2:
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
                 num_admin = st.number_input("Cantidad de gestiones administrativas:", min_value=0, max_value=15, value=1, key="num_admin")
-                
                 for i in range(1, int(num_admin) + 1):
                     c_acc, c_fec = st.columns([2, 1])
                     with c_acc:
@@ -591,35 +634,39 @@ def vista_planificador(modo="Semanal"):
                         fec_adm_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_adm_{i}")
                     
                     if acc_adm.strip():
+                        adm_dates = []
                         if isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 2:
                             s_d, e_d = fec_adm_range
                             delta = (e_d - s_d).days
-                            adm_dates = [s_d + timedelta(days=d) for d in range(delta + 1)]
+                            for d in range(delta + 1):
+                                dt = s_d + timedelta(days=d)
+                                if dt.weekday() < 5 and dt not in feriados_cl:
+                                    adm_dates.append(dt)
                         elif isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 1:
                             adm_dates = [fec_adm_range[0]]
                         else:
                             adm_dates = [fec_adm_range]
 
+                        if not adm_dates: adm_dates = [s_d if 's_d' in locals() else fec_adm_range]
+
                         for dt in adm_dates:
                             plan_transaccional.append({
-                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": "Programada", 
+                                "id_transaccion": str(uuid.uuid4()), "tipo_plan": modo, "tipo_actividad": tipo_actividad_actual, 
                                 "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
-                                "honorarios_estimados": 0.0,
-                                "estado_proyectado": "N/A", "subestado_proyectado": "N/A", "accion": acc_adm.strip(), 
-                                "fecha_compromiso": dt.strftime("%Y-%m-%d"), "estado_cumplimiento": "Pendiente", 
-                                "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                "honorarios_estimados": 0.0, "estado_proyectado": "N/A", "subestado_proyectado": "N/A", 
+                                "accion": acc_adm.strip(), "fecha_compromiso": dt.strftime("%Y-%m-%d"), 
+                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             })
 
             st.markdown("---")
             if len(plan_transaccional) > 0:
-                st.info(f"Se han consolidado **{len(plan_transaccional)} acciones** en total para guardar.")
-                if st.button(f"💾 COMPROMETER PLAN {modo.upper()}"):
+                st.info(f"Se consolidaron **{len(plan_transaccional)} transacciones** para guardar.")
+                if st.button(f"💾 GUARDAR REGISTROS ({tipo_actividad_actual.upper()})"):
                     try:
-                        # SOLUCIÓN: Forzamos la descarga del plan desde la nube antes de anexar la nueva data
                         if modo == "Mensual":
                             plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Plan Mensual MCL ({mes_opcion}) guardado exitosamente en la bóveda y respaldado en la nube.")
+                            st.success(f"Plan Mensual MCL ({mes_opcion}) actualizado exitosamente.")
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
                             
@@ -631,11 +678,11 @@ def vista_planificador(modo="Semanal"):
                                 save_plan_actualizado(mcl_path, mcl_data) 
                                 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Plan Semanal guardado exitosamente para la {semana_opcion} y respaldado en la nube.")
+                            st.success(f"Registro exitoso para la {semana_opcion}. Documento respaldado.")
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
-                st.warning("Complete el detalle de las acciones o seleccione casos válidos para guardar el plan.")
+                st.warning("Complete el detalle de las acciones o seleccione casos válidos para guardar.")
     else:
         st.info("Módulo en espera: Suba el archivo 'Reporte de acciones' en el panel izquierdo.")
 
