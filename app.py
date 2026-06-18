@@ -1663,7 +1663,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.5 (Carátula de Honorarios IFL/WIP)
+# VERSIÓN: 4.5.6 (Cálculo Financiero Carátula Estricto por Caso)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1709,21 +1709,25 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             aggfunc=lambda x: ' | '.join(x)
         ).fillna('')
         
-        # --- AGRUPACIÓN MAESTRA DE TAREAS ---
-        grouped = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
-
-        # --- CÁLCULO DE TOTALES PARA CARÁTULA (Sin duplicar multidías) ---
+        # --- CÁLCULO DE TOTALES PARA CARÁTULA (Estricto por Caso para no duplicar UF) ---
         uf_ifl_total = 0.0
         uf_wip_total = 0.0
         
-        for name, group in grouped:
-            accion_str = str(name[4]).lower()
+        # Agrupamos por Ajustador y Caso para consolidar el honorario una única vez por siniestro
+        casos_agrupados = df_operativa.groupby(['Ajustador', 'numero_caso'])
+        
+        for (ajustador, caso), group in casos_agrupados:
             try:
+                # Tomamos el valor de la UF una sola vez (el máximo registrado para asegurar que no tome un 0 accidental)
                 uf_val = float(group['honorarios_estimados'].max())
             except:
                 uf_val = 0.0
                 
-            if 'informe final de liquidación' in accion_str or 'carta de cobertura (rechazo)' in accion_str:
+            # Concatenamos todas las acciones del caso en la semana para analizarlas
+            acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
+            
+            # Si en la semana el caso tiene un entregable de cierre, todo su peso va a IFL
+            if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
                 uf_ifl_total += uf_val
             else:
                 uf_wip_total += uf_val
@@ -1749,6 +1753,9 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         st.dataframe(df_gantt_visual, use_container_width=True)
 
+        # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN GANTT ---
+        grouped_gantt = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
+
         # Aislar solo los días hábiles (Lunes a Viernes) para las columnas
         dias_habiles_target = [d for d in dias_semana_target if d.weekday() < 5]
 
@@ -1763,7 +1770,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         encabezados.append("Hon UF")
         ws.append(encabezados)
         
-        for name, group in grouped:
+        for name, group in grouped_gantt:
             row = list(name)
             for f in dias_habiles_target:
                 if f in group['fecha_compromiso'].values:
@@ -1772,7 +1779,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                     row.append("")
                     
             try:
-                # Usamos max() para no inflar las UF si la tarea abarca varios días
+                # Usamos max() para no inflar las UF en la fila de la acción
                 total_honorarios = float(group['honorarios_estimados'].max())
             except:
                 total_honorarios = 0.0
@@ -1887,7 +1894,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         hoy = datetime.now().date()
         
         # ITERACIÓN INTELIGENTE (1 FILA = 1 TAREA)
-        for name, group in grouped:
+        for name, group in grouped_gantt:
             ajustador_actual, caso_actual, nickname, asegurado, accion = name
             row_cells = table.add_row().cells
             
@@ -1956,7 +1963,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 else:
                     row_cells[col_idx].text = ""
             
-            # Honorarios unificados en la última celda (Índice 10 en vez de 12 tras borrar S y D)
+            # Honorarios unificados en la última celda
             try:
                 val_uf = float(group['honorarios_estimados'].max())
                 if val_uf > 0:
