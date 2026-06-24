@@ -1074,13 +1074,14 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.7 (Consolidación de Entregables Multidía)
+# VERSIÓN: 4.3.8 (Gráficos de Torta UI/Word en Inventario)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
     import pandas as pd
     import streamlit as st
     import plotly.graph_objects as go
+    import plotly.express as px
     from openpyxl import Workbook
     from docx import Document
     from docx.shared import Pt, Cm, RGBColor
@@ -1180,6 +1181,27 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         
         df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
         df_entregables['accion'] = df_entregables['accion'].str.replace('Reunión - ', '', regex=False)
+        
+        # --- GRÁFICOS DE TORTA (UI Web) ---
+        df_pie_qty = df_entregables['accion'].value_counts().reset_index()
+        df_pie_qty.columns = ['Entregable', 'Cantidad']
+        
+        df_pie_uf = df_entregables.groupby('accion')['honorarios_estimados'].sum().reset_index()
+        df_pie_uf.columns = ['Entregable', 'UF']
+        
+        fig_qty = px.pie(df_pie_qty, values='Cantidad', names='Entregable', title='Distribución por Cantidad de Entregables', hole=0.3)
+        fig_qty.update_traces(textposition='inside', textinfo='percent+label')
+        fig_qty.update_layout(showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+
+        fig_uf = px.pie(df_pie_uf, values='UF', names='Entregable', title='Distribución por Valorización (UF)', hole=0.3)
+        fig_uf.update_traces(textposition='inside', textinfo='percent+label')
+        fig_uf.update_layout(showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+        
+        c_pie1, c_pie2 = st.columns(2)
+        with c_pie1: st.plotly_chart(fig_qty, use_container_width=True, key=f"pie_qty_{target_week_id}")
+        with c_pie2: st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_uf_{target_week_id}")
+        
+        # Dar formato a la UF para la tabla
         df_entregables['honorarios_estimados'] = df_entregables['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
         
         df_mostrar = df_entregables.rename(columns={
@@ -1201,14 +1223,14 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     if not df_com_raw.empty:
         df_com_raw['Fecha'] = pd.to_datetime(df_com_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
         df_com = df_com_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle de la Gestión'})
-        df_com = df_com.drop_duplicates() # Elimina gestiones idénticas guardadas en el mismo día
+        df_com = df_com.drop_duplicates() 
     
     df_adm_raw = df_realizados[(df_realizados['categoria'] == 'Gestión Administrativa') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))].copy()
     df_adm = pd.DataFrame()
     if not df_adm_raw.empty:
         df_adm_raw['Fecha'] = pd.to_datetime(df_adm_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
         df_adm = df_adm_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle / Comités'})
-        df_adm = df_adm.drop_duplicates() # Elimina gestiones idénticas guardadas en el mismo día
+        df_adm = df_adm.drop_duplicates() 
     
     col_com, col_adm = st.columns(2)
     with col_com:
@@ -1344,9 +1366,42 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
     
-    # 4. Tabla Entregables
+    # 4. Tabla Entregables con Gráficos de Torta
     if not df_mostrar.empty:
         dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
+        
+        # --- Motor de Tortas en Word ---
+        def generar_torta_estatica(labels, sizes, titulo):
+            import matplotlib.pyplot as plt
+            import io
+            fig, ax = plt.subplots(figsize=(4, 3))
+            wedges, texts, autotexts = ax.pie(sizes, autopct='%1.1f%%', startangle=90, textprops=dict(color="w", weight="bold", fontsize=8))
+            ax.legend(wedges, labels, title="Entregables", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), fontsize=7)
+            ax.set_title(titulo, fontsize=11, color='#003366', fontweight='bold')
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+            plt.close(fig)
+            return buf.getvalue()
+
+        try:
+            t_pies = dash_doc.add_table(rows=1, cols=2)
+            t_pies.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            if df_pie_qty['Cantidad'].sum() > 0:
+                img_qty = generar_torta_estatica(df_pie_qty['Entregable'].tolist(), df_pie_qty['Cantidad'].tolist(), "Cantidad de Entregables")
+                c_qty = t_pies.rows[0].cells[0]
+                c_qty.paragraphs[0].add_run().add_picture(io.BytesIO(img_qty), width=Cm(7.5))
+                c_qty.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            if df_pie_uf['UF'].sum() > 0:
+                img_uf = generar_torta_estatica(df_pie_uf['Entregable'].tolist(), df_pie_uf['UF'].tolist(), "Valorización en UF")
+                c_uf = t_pies.rows[0].cells[1]
+                c_uf.paragraphs[0].add_run().add_picture(io.BytesIO(img_uf), width=Cm(7.5))
+                c_uf.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            dash_doc.add_paragraph("")
+        except Exception:
+            pass
+
         t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
         t_ent.style = 'Table Grid'
         for i, col_name in enumerate(df_mostrar.columns):
@@ -1415,7 +1470,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # VERSIÓN: 4.4.3 (Filtro Inteligente + ID Únicos para Gráficos)
