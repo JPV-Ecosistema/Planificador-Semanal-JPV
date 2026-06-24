@@ -700,9 +700,16 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
-# VERSIÓN: 2.4 (Sincronización Automática e Ingreso Múltiple No Programadas)
+# VERSIÓN: 2.4.1 (Apertura Global a Ajustadores y Sincronización)
 # ---------------------------------------------------------
 def vista_diario():
+    import json
+    import os
+    import uuid
+    import pandas as pd
+    import streamlit as st
+    from datetime import datetime
+    
     st.title("☀️ Ejecución y Cumplimiento")
     hoy_str = datetime.now().strftime("%Y-%m-%d")
     st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
@@ -730,22 +737,19 @@ def vista_diario():
                 except Exception:
                     pass
 
-    # --- MOTOR DE BÚSQUEDA AUTOMÁTICA DE AJUSTADORES ---
-    try:
-        archivos = [f for f in os.listdir(PERSISTENCE_DIR) if f.startswith('plan_') and f.endswith(f'_{week_id}.json')]
-        ajustadores_con_plan = []
-        for archivo in archivos:
-            nombre = archivo.replace('plan_', '').replace(f'_{week_id}.json', '').replace('_', ' ')
-            ajustadores_con_plan.append(nombre)
-        ajustadores_con_plan = sorted(list(set(ajustadores_con_plan)))
-    except Exception:
-        ajustadores_con_plan = []
-
-    if not ajustadores_con_plan:
-        st.info("⚠️ Ningún ajustador ha comprometido su Plan Operativo para esta semana en la base del sistema.")
+    # --- MOTOR DE BÚSQUEDA GLOBAL DE AJUSTADORES (Base Maestra) ---
+    df_maestro = load_master_base()
+    ajustadores_validos = []
+    
+    if df_maestro is not None:
+        col_ajustador = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
+        ajustadores_validos = sorted(df_maestro[col_ajustador].dropna().unique())
+        
+    if not ajustadores_validos:
+        st.info("⚠️ No se pudo cargar la lista de ajustadores desde la Base Maestra.")
         return
 
-    ajustador_input = st.selectbox("Seleccione su nombre de Ajustador:", [""] + ajustadores_con_plan)
+    ajustador_input = st.selectbox("Seleccione su nombre de Ajustador:", [""] + ajustadores_validos)
     
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
@@ -767,7 +771,6 @@ def vista_diario():
                     np_asegurado = st.text_input(f"Asegurado {i}:", key=f"np_aseg_{i}")
                 with colNP2:
                     np_accion = st.text_input(f"Acción Ejecutada {i}:", key=f"np_acc_{i}")
-                    # Por defecto sugiere la fecha de hoy, pero permite cambiarla si la urgencia fue ayer
                     np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=datetime.now(), key=f"np_fec_{i}")
                 
                 # Solo preparamos el registro si llenaron los datos mínimos clave
@@ -775,7 +778,7 @@ def vista_diario():
                     nuevas_actividades.append({
                         "id_transaccion": str(uuid.uuid4()),
                         "tipo_plan": "Diario",
-                        "tipo_actividad": "No Programada",
+                        "tipo_actividad": "Actividad Adicional",
                         "categoria": "Operativa",
                         "numero_caso": str(np_caso),
                         "asegurado": str(np_asegurado),
@@ -801,7 +804,7 @@ def vista_diario():
                     st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada en alguna de las filas para poder guardar.")
 
         if not plan_data:
-            st.warning(f"⚠️ No se encontraron compromisos agendados para **{ajustador_input}** en la semana en curso.")
+            st.warning(f"⚠️ No se encontraron compromisos agendados para **{ajustador_input}** en la semana en curso. Sin embargo, puede registrar sus urgencias en el módulo superior.")
         else:
             st.success("Plan Operativo sincronizado correctamente.")
             st.markdown("---")
