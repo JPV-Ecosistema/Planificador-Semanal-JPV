@@ -1074,7 +1074,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.6 (Motor Nativo Matplotlib - Cero Colapsos de RAM)
+# VERSIÓN: 4.3.7 (Consolidación de Entregables Multidía)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1149,6 +1149,9 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     df_mcl_mostrar = pd.DataFrame(columns=['Caso', 'Asegurado', 'Gestión MCL', 'Hon UF'])
     
     if not df_mcl.empty:
+        # CONSOLIDACIÓN: Agrupa por caso y acción para evitar duplicar las tareas multidía
+        df_mcl = df_mcl.groupby(['Ajustador', 'numero_caso', 'asegurado', 'accion'], as_index=False).agg({'honorarios_estimados': 'max'})
+        
         df_mcl['accion'] = df_mcl['accion'].str.replace('Preparar Informe - ', '', regex=False)
         df_mcl['accion'] = df_mcl['accion'].str.replace('Reunión - ', '', regex=False)
         df_mcl['honorarios_estimados'] = df_mcl['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
@@ -1172,6 +1175,9 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     df_mostrar = pd.DataFrame(columns=['Ajustador', 'Caso', 'Nick Name', 'Asegurado', 'Tipo de Entregable', 'Hon UF'])
     
     if not df_entregables.empty:
+        # CONSOLIDACIÓN: Agrupa por caso y tipo de entregable para no repetir filas de trabajo consecutivo
+        df_entregables = df_entregables.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'], as_index=False).agg({'honorarios_estimados': 'max'})
+        
         df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
         df_entregables['accion'] = df_entregables['accion'].str.replace('Reunión - ', '', regex=False)
         df_entregables['honorarios_estimados'] = df_entregables['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
@@ -1195,12 +1201,14 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     if not df_com_raw.empty:
         df_com_raw['Fecha'] = pd.to_datetime(df_com_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
         df_com = df_com_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle de la Gestión'})
+        df_com = df_com.drop_duplicates() # Elimina gestiones idénticas guardadas en el mismo día
     
     df_adm_raw = df_realizados[(df_realizados['categoria'] == 'Gestión Administrativa') & (~df_realizados['accion'].isin(['0', ' ', '', 0]))].copy()
     df_adm = pd.DataFrame()
     if not df_adm_raw.empty:
         df_adm_raw['Fecha'] = pd.to_datetime(df_adm_raw['fecha_ejecucion'], errors='coerce').dt.strftime('%d-%m-%Y').fillna('N/D')
         df_adm = df_adm_raw[['Fecha', 'Ajustador', 'accion']].rename(columns={'accion': 'Detalle / Comités'})
+        df_adm = df_adm.drop_duplicates() # Elimina gestiones idénticas guardadas en el mismo día
     
     col_com, col_adm = st.columns(2)
     with col_com:
@@ -1361,7 +1369,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         t_com_w.rows[0].cells[0].text = "Fecha"
         t_com_w.rows[0].cells[1].text = "Ajustador"
         t_com_w.rows[0].cells[2].text = "Detalle de la Gestión"
-        formatear_cabecera_tabla(t_com_w, "004A99") # Azul corporativo
+        formatear_cabecera_tabla(t_com_w, "004A99") 
         
         for _, row in df_com.iterrows():
             row_cells = t_com_w.add_row().cells
@@ -1377,7 +1385,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         t_adm_w.rows[0].cells[0].text = "Fecha"
         t_adm_w.rows[0].cells[1].text = "Ajustador"
         t_adm_w.rows[0].cells[2].text = "Detalle / Comités"
-        formatear_cabecera_tabla(t_adm_w, "6C757D") # Gris corporativo
+        formatear_cabecera_tabla(t_adm_w, "6C757D") 
         
         for _, row in df_adm.iterrows():
             row_cells = t_adm_w.add_row().cells
@@ -1407,7 +1415,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
