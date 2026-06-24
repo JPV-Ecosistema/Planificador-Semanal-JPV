@@ -313,13 +313,14 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.4.0 (Ventana de Compromiso, Feriados CL y Visibilidad)
+# VERSIÓN: 2.4.2 (Candado Chile Time Definitivo, Feriados y Visibilidad)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     import pandas as pd
     import json
     import os
     import uuid
+    import pytz
     from datetime import datetime, timedelta
     
     # Motor de feriados (Requiere añadir 'holidays' a requirements.txt)
@@ -358,18 +359,21 @@ def vista_planificador(modo="Semanal"):
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
     
-    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO SEMANAL) ---
+    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO - AJUSTE CHILE TIME) ---
+    tz_chile = pytz.timezone('America/Santiago')
+    hoy_dt = datetime.now(tz_chile).date()
+    
     es_adicional = False
     if modo == "Semanal":
-        hoy_dt = datetime.now().date()
-        target_date = datetime.now() + timedelta(weeks=offset_weeks)
+        # Usamos la misma zona horaria para los cálculos de fecha objetivo
+        target_date = datetime.now(tz_chile) + timedelta(weeks=offset_weeks)
         lunes_target = target_date.date() - timedelta(days=target_date.weekday())
         viernes_prev = lunes_target - timedelta(days=3)
         
-        # Si hoy NO está entre el viernes anterior y el lunes objetivo, es fuera de plazo
+        # El candado es robusto: se basa en la hora local real de Chile
         if not (viernes_prev <= hoy_dt <= lunes_target):
             es_adicional = True
-            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado. Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
+            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado (Hora local en Chile: {datetime.now(tz_chile).strftime('%H:%M:%S')}). Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
 
     tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
 
