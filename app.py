@@ -1759,7 +1759,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.6 (Cálculo Financiero Carátula Estricto por Caso)
+# VERSIÓN: 4.5.7 (Inyección Visual de Actividades Adicionales en Celeste)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1809,20 +1809,16 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         uf_ifl_total = 0.0
         uf_wip_total = 0.0
         
-        # Agrupamos por Ajustador y Caso para consolidar el honorario una única vez por siniestro
         casos_agrupados = df_operativa.groupby(['Ajustador', 'numero_caso'])
         
         for (ajustador, caso), group in casos_agrupados:
             try:
-                # Tomamos el valor de la UF una sola vez (el máximo registrado para asegurar que no tome un 0 accidental)
                 uf_val = float(group['honorarios_estimados'].max())
             except:
                 uf_val = 0.0
                 
-            # Concatenamos todas las acciones del caso en la semana para analizarlas
             acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
             
-            # Si en la semana el caso tiene un entregable de cierre, todo su peso va a IFL
             if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
                 uf_ifl_total += uf_val
             else:
@@ -1852,7 +1848,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN GANTT ---
         grouped_gantt = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
 
-        # Aislar solo los días hábiles (Lunes a Viernes) para las columnas
         dias_habiles_target = [d for d in dias_semana_target if d.weekday() < 5]
 
         # Exportación Excel Gantt
@@ -1875,7 +1870,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                     row.append("")
                     
             try:
-                # Usamos max() para no inflar las UF en la fila de la acción
                 total_honorarios = float(group['honorarios_estimados'].max())
             except:
                 total_honorarios = 0.0
@@ -1913,7 +1907,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         t_caratula = doc.add_table(rows=1, cols=2)
         t_caratula.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        # Celda IFL (Verde)
         c_ifl = t_caratula.rows[0].cells[0]
         shd_ifl = parse_xml(r'<w:shd {} w:fill="28A745"/>'.format(nsdecls('w')))
         c_ifl._tc.get_or_add_tcPr().append(shd_ifl)
@@ -1928,7 +1921,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         r_ifl_val.font.size = Pt(30)
         r_ifl_val.font.bold = True
         
-        # Celda WIP (Azul)
         c_wip = t_caratula.rows[0].cells[1]
         shd_wip = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
         c_wip._tc.get_or_add_tcPr().append(shd_wip)
@@ -1946,15 +1938,19 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         doc.add_paragraph("")
         doc.add_paragraph("")
         
-        # --- LEYENDA DE COLORES EN WORD ---
+        # --- LEYENDA DE COLORES EN WORD ACTUALIZADA ---
         leyenda = doc.add_paragraph()
-        run_g = leyenda.add_run("🟢 Verde con ✔: ")
+        run_g = leyenda.add_run("🟢 Verde: ")
         run_g.bold = True
         leyenda.add_run("Ejecutado a tiempo   |   ")
         
-        run_y = leyenda.add_run("🟡 Amarillo con ✔: ")
+        run_y = leyenda.add_run("🟡 Amarillo: ")
         run_y.bold = True
         leyenda.add_run("Ejecutado con atraso   |   ")
+        
+        run_c = leyenda.add_run("🔵 Celeste: ")
+        run_c.bold = True
+        leyenda.add_run("Actividad Adicional (Fuera de plazo)   |   ")
         
         run_r = leyenda.add_run("🔴 Rojo con X: ")
         run_r.bold = True
@@ -1967,7 +1963,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         leyenda.alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph("")
         
-        # Se remueven 'S' y 'D' de la tabla de Word
         headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
         table = doc.add_table(rows=1, cols=len(headers_word))
         table.style = 'Table Grid'
@@ -1994,7 +1989,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             ajustador_actual, caso_actual, nickname, asegurado, accion = name
             row_cells = table.add_row().cells
             
-            # Limpieza Visual (No repetir nombres ni casos seguidos)
             if ajustador_actual == ajustador_previo:
                 row_cells[0].text = ""
                 if caso_actual == caso_previo:
@@ -2016,7 +2010,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             
             row_cells[4].text = str(accion)
             
-            # Pintado Horizontal de Días (Solo Lunes a Viernes)
             for i_date, f_date in enumerate(dias_habiles_target):
                 col_idx = 5 + i_date
                 match = group[group['fecha_compromiso'] == f_date]
@@ -2025,8 +2018,10 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                     row_data = match.iloc[0]
                     estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
                     fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
+                    tipo_actividad_gantt = str(row_data.get('tipo_actividad', ''))
                     
                     es_pasado = f_date < hoy
+                    es_adicional = (tipo_actividad_gantt == 'Actividad Adicional')
                     
                     if es_pasado:
                         if estado_cumplimiento == 'Realizado':
@@ -2039,7 +2034,9 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                                         es_atrasada = True
                                 except: pass
                                 
-                            if es_atrasada:
+                            if es_adicional:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste
+                            elif es_atrasada:
                                 shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w'))) # Amarillo
                             else:
                                 shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
@@ -2047,19 +2044,23 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                             row_cells[col_idx].text = "X"
                             shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w'))) # Rojo
                     else:
-                        # Día Actual o Futuro
                         if estado_cumplimiento == 'Realizado':
                             row_cells[col_idx].text = "✔"
-                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
+                            if es_adicional:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste
+                            else:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
                         else:
                             row_cells[col_idx].text = ""
-                            shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde vacío
+                            if es_adicional:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste vacío
+                            else:
+                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde vacío
                             
                     row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
                 else:
                     row_cells[col_idx].text = ""
             
-            # Honorarios unificados en la última celda
             try:
                 val_uf = float(group['honorarios_estimados'].max())
                 if val_uf > 0:
@@ -2079,7 +2080,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         word_buffer = io.BytesIO()
         doc.save(word_buffer)
 
-        # BOTONES DE DESCARGA GANTT
         st.markdown("---")
         st.markdown("### Opciones de Exportación Gantt Corporativa")
         col1, col2, col3 = st.columns(3)
