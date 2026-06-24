@@ -1074,7 +1074,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.9 (Optimización Visual de Tortas para Word)
+# VERSIÓN: 4.3.10 (Paginación Inteligente y Optimización de Fuente)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1150,7 +1150,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     df_mcl_mostrar = pd.DataFrame(columns=['Caso', 'Asegurado', 'Gestión MCL', 'Hon UF'])
     
     if not df_mcl.empty:
-        # CONSOLIDACIÓN: Agrupa por caso y acción para evitar duplicar las tareas multidía
         df_mcl = df_mcl.groupby(['Ajustador', 'numero_caso', 'asegurado', 'accion'], as_index=False).agg({'honorarios_estimados': 'max'})
         
         df_mcl['accion'] = df_mcl['accion'].str.replace('Preparar Informe - ', '', regex=False)
@@ -1176,7 +1175,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     df_mostrar = pd.DataFrame(columns=['Ajustador', 'Caso', 'Nick Name', 'Asegurado', 'Tipo de Entregable', 'Hon UF'])
     
     if not df_entregables.empty:
-        # CONSOLIDACIÓN: Agrupa por caso y tipo de entregable para no repetir filas de trabajo consecutivo
         df_entregables = df_entregables.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'], as_index=False).agg({'honorarios_estimados': 'max'})
         
         df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
@@ -1203,7 +1201,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         with c_pie1: st.plotly_chart(fig_qty, use_container_width=True, key=f"pie_qty_{target_week_id}")
         with c_pie2: st.plotly_chart(fig_uf, use_container_width=True, key=f"pie_uf_{target_week_id}")
         
-        # Dar formato a la UF para la tabla
         df_entregables['honorarios_estimados'] = df_entregables['honorarios_estimados'].apply(lambda x: f"{x:,.2f}")
         
         df_mostrar = df_entregables.rename(columns={
@@ -1269,7 +1266,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     dash_doc = Document()
     dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
-    # 1. Tabla Financiera VIP
+    # 1. Tabla Financiera VIP (Se mantiene grande en la portada)
     dash_doc.add_heading('💰 1. Valorización de Cartera y Facturación Proyectada', level=1)
     t_fin = dash_doc.add_table(rows=2, cols=2)
     t_fin.style = 'Table Grid'
@@ -1346,33 +1343,32 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         celda_img_pro.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
         celda_img_pro.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     except Exception as e:
-        st.error(f"Error gráfico local: {e}")
         t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
         t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
         
-    dash_doc.add_paragraph("")
-
-    # 3. Tabla MCL
+    # 3. Tabla MCL (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
     if not df_mcl_mostrar.empty:
+        dash_doc.add_page_break()
         dash_doc.add_heading('🏆 Radar de Casos MCL', level=1)
         t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl_mostrar.columns))
         t_mcl.style = 'Table Grid'
         columnas_mcl = list(df_mcl_mostrar.columns)
         for i, col_name in enumerate(columnas_mcl):
             t_mcl.rows[0].cells[i].text = str(col_name)
+            t_mcl.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
         formatear_cabecera_tabla(t_mcl, "D9534F")
         
         for row_val in df_mcl_mostrar.values.tolist():
             row_cells = t_mcl.add_row().cells
             for i, val in enumerate(row_val):
                 row_cells[i].text = str(val)
-        dash_doc.add_paragraph("")
+                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
     
-    # 4. Tabla Entregables con Gráficos de Torta (Optimizados)
+    # 4. Tabla Entregables con Gráficos de Torta (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
     if not df_mostrar.empty:
+        dash_doc.add_page_break()
         dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
         
-        # --- Motor de Tortas en Word ---
         def generar_torta_estatica(labels, sizes, titulo):
             import matplotlib.pyplot as plt
             import io
@@ -1421,48 +1417,56 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         t_ent.style = 'Table Grid'
         for i, col_name in enumerate(df_mostrar.columns):
             t_ent.rows[0].cells[i].text = str(col_name)
+            t_ent.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
         formatear_cabecera_tabla(t_ent, "28A745")
         
         for row_val in df_mostrar.values.tolist():
             row_cells = t_ent.add_row().cells
             for i, val in enumerate(row_val):
                 row_cells[i].text = str(val)
-        dash_doc.add_paragraph("")
+                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
         
-    # 5. Tablas Comerciales y Admin
-    dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
-    
-    if not df_com.empty:
-        dash_doc.add_heading('🔵 Gestiones Comerciales', level=2)
-        t_com_w = dash_doc.add_table(rows=1, cols=3)
-        t_com_w.style = 'Table Grid'
-        t_com_w.rows[0].cells[0].text = "Fecha"
-        t_com_w.rows[0].cells[1].text = "Ajustador"
-        t_com_w.rows[0].cells[2].text = "Detalle de la Gestión"
-        formatear_cabecera_tabla(t_com_w, "004A99") 
+    # 5. Tablas Comerciales y Admin (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
+    if not df_com.empty or not df_adm.empty:
+        dash_doc.add_page_break()
+        dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
         
-        for _, row in df_com.iterrows():
-            row_cells = t_com_w.add_row().cells
-            row_cells[0].text = str(row['Fecha'])
-            row_cells[1].text = str(row['Ajustador'])
-            row_cells[2].text = str(row['Detalle de la Gestión'])
-        dash_doc.add_paragraph("")
-    
-    if not df_adm.empty:
-        dash_doc.add_heading('⚪ Gestiones Administrativas', level=2)
-        t_adm_w = dash_doc.add_table(rows=1, cols=3)
-        t_adm_w.style = 'Table Grid'
-        t_adm_w.rows[0].cells[0].text = "Fecha"
-        t_adm_w.rows[0].cells[1].text = "Ajustador"
-        t_adm_w.rows[0].cells[2].text = "Detalle / Comités"
-        formatear_cabecera_tabla(t_adm_w, "6C757D") 
+        if not df_com.empty:
+            dash_doc.add_heading('🔵 Gestiones Comerciales', level=2)
+            t_com_w = dash_doc.add_table(rows=1, cols=3)
+            t_com_w.style = 'Table Grid'
+            encabezados_com = ["Fecha", "Ajustador", "Detalle de la Gestión"]
+            for i, titulo in enumerate(encabezados_com):
+                t_com_w.rows[0].cells[i].text = titulo
+                t_com_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+            formatear_cabecera_tabla(t_com_w, "004A99") 
+            
+            for _, row in df_com.iterrows():
+                row_cells = t_com_w.add_row().cells
+                row_cells[0].text = str(row['Fecha'])
+                row_cells[1].text = str(row['Ajustador'])
+                row_cells[2].text = str(row['Detalle de la Gestión'])
+                for cell in row_cells:
+                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
+            dash_doc.add_paragraph("")
         
-        for _, row in df_adm.iterrows():
-            row_cells = t_adm_w.add_row().cells
-            row_cells[0].text = str(row['Fecha'])
-            row_cells[1].text = str(row['Ajustador'])
-            row_cells[2].text = str(row['Detalle / Comités'])
-        dash_doc.add_paragraph("")
+        if not df_adm.empty:
+            dash_doc.add_heading('⚪ Gestiones Administrativas', level=2)
+            t_adm_w = dash_doc.add_table(rows=1, cols=3)
+            t_adm_w.style = 'Table Grid'
+            encabezados_adm = ["Fecha", "Ajustador", "Detalle / Comités"]
+            for i, titulo in enumerate(encabezados_adm):
+                t_adm_w.rows[0].cells[i].text = titulo
+                t_adm_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+            formatear_cabecera_tabla(t_adm_w, "6C757D") 
+            
+            for _, row in df_adm.iterrows():
+                row_cells = t_adm_w.add_row().cells
+                row_cells[0].text = str(row['Fecha'])
+                row_cells[1].text = str(row['Ajustador'])
+                row_cells[2].text = str(row['Detalle / Comités'])
+                for cell in row_cells:
+                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
 
     word_dash_buffer = io.BytesIO()
     dash_doc.save(word_dash_buffer)
@@ -1485,7 +1489,6 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
-
 
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
