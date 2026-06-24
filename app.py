@@ -700,7 +700,7 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
-# VERSIÓN: 2.4.1 (Apertura Global a Ajustadores y Sincronización)
+# VERSIÓN: 2.4.2 (Sincronización Inteligente y Autocompletado de Casos)
 # ---------------------------------------------------------
 def vista_diario():
     import json
@@ -754,6 +754,22 @@ def vista_diario():
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
         
+        # --- CARGA DE CASOS PARA AUTOCOMPLETADO ---
+        opciones_casos = ["Gestión Manual (Caso fuera de sistema)"]
+        dict_casos = {}
+        if df_maestro is not None and not df_maestro.empty:
+            casos_ajustador = df_maestro[(df_maestro[col_ajustador] == ajustador_input) & (df_maestro['Estado'] != 'Cerrado')]
+            for _, row in casos_ajustador.iterrows():
+                num = str(row.get('Número de caso', '')).strip()
+                if num:
+                    aseg = str(row.get('Asegurado', '')).strip()
+                    nick = str(row.get('Nickname', '')).strip()
+                    lbl = f"[{num}] {aseg}"
+                    if nick:
+                        lbl += f" - [{nick}]"
+                    opciones_casos.append(lbl)
+                    dict_casos[lbl] = {"caso": num, "asegurado": aseg}
+
         # --- MÓDULO DE ACTIVIDADES NO PROGRAMADAS (INGRESO MÚLTIPLE) ---
         st.markdown("---")
         with st.expander("➕ REGISTRAR ACTIVIDADES NO PROGRAMADAS (Urgencias / Fuera de Plan)", expanded=False):
@@ -765,10 +781,20 @@ def vista_diario():
             
             for i in range(1, int(num_np) + 1):
                 st.markdown(f"**Urgencia {i}**")
+                
+                seleccion_caso = st.selectbox(f"Asociar a un caso vigente {i}:", options=opciones_casos, key=f"sel_caso_{i}")
+                
                 colNP1, colNP2 = st.columns(2)
                 with colNP1:
-                    np_caso = st.text_input(f"Número de Caso (o Ref) {i}:", key=f"np_caso_{i}")
-                    np_asegurado = st.text_input(f"Asegurado {i}:", key=f"np_aseg_{i}")
+                    if seleccion_caso == "Gestión Manual (Caso fuera de sistema)":
+                        np_caso = st.text_input(f"Número de Caso (o Ref) {i}:", key=f"np_caso_{i}")
+                        np_asegurado = st.text_input(f"Asegurado {i}:", key=f"np_aseg_{i}")
+                    else:
+                        np_caso = dict_casos[seleccion_caso]["caso"]
+                        np_asegurado = dict_casos[seleccion_caso]["asegurado"]
+                        st.text_input(f"Número de Caso {i}:", value=np_caso, disabled=True, key=f"np_caso_dis_{i}")
+                        st.text_input(f"Asegurado {i}:", value=np_asegurado, disabled=True, key=f"np_aseg_dis_{i}")
+                        
                 with colNP2:
                     np_accion = st.text_input(f"Acción Ejecutada {i}:", key=f"np_acc_{i}")
                     np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=datetime.now(), key=f"np_fec_{i}")
