@@ -313,7 +313,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.4.2 (Candado Chile Time Definitivo, Feriados y Visibilidad)
+# VERSIÓN: 2.4.3 (Reloj en Tiempo Real y Candado Chile Time)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     import pandas as pd
@@ -329,6 +329,11 @@ def vista_planificador(modo="Semanal"):
         feriados_cl = holidays.Chile()
     except ImportError:
         feriados_cl = []
+
+    # --- RELOJ Y ZONA HORARIA (CHILE) ---
+    tz_chile = pytz.timezone('America/Santiago')
+    ahora_chile = datetime.now(tz_chile)
+    hoy_dt = ahora_chile.date()
 
     col_t1, col_t2 = st.columns([2, 1])
     with col_t1:
@@ -350,6 +355,9 @@ def vista_planificador(modo="Semanal"):
             offset_months = 0 if mes_opcion == "Mes Actual" else 1
             offset_weeks = 0
             
+        # Reloj visible para el ajustador
+        st.markdown(f"<div style='text-align: right; color: #6c757d; font-size: 14px; margin-top: 5px;'>🕒 Hora Oficial del Sistema (Chile): <b>{ahora_chile.strftime('%H:%M')} hrs</b></div>", unsafe_allow_html=True)
+            
     CATALOGO_ACCIONES = {
         "En Ajuste": ["Revisión de cobertura", "Revisión de antecedentes", "Otro / Manual"],
         "Inspección": ["Presencial", "Remota", "Otro / Manual"],
@@ -359,21 +367,18 @@ def vista_planificador(modo="Semanal"):
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
     
-    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO - AJUSTE CHILE TIME) ---
-    tz_chile = pytz.timezone('America/Santiago')
-    hoy_dt = datetime.now(tz_chile).date()
-    
+    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO) ---
     es_adicional = False
     if modo == "Semanal":
         # Usamos la misma zona horaria para los cálculos de fecha objetivo
-        target_date = datetime.now(tz_chile) + timedelta(weeks=offset_weeks)
+        target_date = ahora_chile + timedelta(weeks=offset_weeks)
         lunes_target = target_date.date() - timedelta(days=target_date.weekday())
         viernes_prev = lunes_target - timedelta(days=3)
         
         # El candado es robusto: se basa en la hora local real de Chile
         if not (viernes_prev <= hoy_dt <= lunes_target):
             es_adicional = True
-            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado (Hora local en Chile: {datetime.now(tz_chile).strftime('%H:%M:%S')}). Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
+            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado. Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
 
     tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
 
@@ -425,7 +430,7 @@ def vista_planificador(modo="Semanal"):
             
             # --- HERENCIA MCL ---
             if modo == "Semanal":
-                target_date = datetime.now() + timedelta(weeks=offset_weeks)
+                target_date = ahora_chile + timedelta(weeks=offset_weeks)
                 target_month_id = target_date.strftime("%Y_%m")
                 mcl_data, mcl_path = load_plan_mensual(ajustador_seleccionado, explicit_month_id=target_month_id)
                 target_week_id = get_week_identifier(offset_weeks)
@@ -554,7 +559,7 @@ def vista_planificador(modo="Semanal"):
                                         elif sub_accion:
                                             accion_final = f"{cat_accion} - {sub_accion}"
                             with colC:
-                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(datetime.now(), datetime.now()), key=f"fecha_{idx}_{i}")
+                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fecha_{idx}_{i}")
                             
                             if accion_final.strip():
                                 act_dates = []
@@ -588,7 +593,7 @@ def vista_planificador(modo="Semanal"):
                                         "accion": accion_final,
                                         "fecha_compromiso": dt.strftime("%Y-%m-%d"),
                                         "estado_cumplimiento": "Pendiente",
-                                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                        "fecha_planificacion": ahora_chile.strftime("%Y-%m-%d %H:%M:%S")
                                     })
                                 
             st.markdown("---")
@@ -603,7 +608,7 @@ def vista_planificador(modo="Semanal"):
                     with c_acc:
                         acc_com = st.text_input(f"Detalle gestión {i}:", placeholder="Reuniones, visitas a corredoras...", key=f"txt_com_{i}")
                     with c_fec:
-                        fec_com_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_com_{i}")
+                        fec_com_range = st.date_input(f"Rango {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fec_com_{i}")
                     
                     if acc_com.strip():
                         com_dates = []
@@ -627,7 +632,7 @@ def vista_planificador(modo="Semanal"):
                                 "categoria": "Gestión Comercial", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
                                 "honorarios_estimados": 0.0, "estado_proyectado": "N/A", "subestado_proyectado": "N/A", 
                                 "accion": acc_com.strip(), "fecha_compromiso": dt.strftime("%Y-%m-%d"), 
-                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": ahora_chile.strftime("%Y-%m-%d %H:%M:%S")
                             })
             
             with col2:
@@ -638,7 +643,7 @@ def vista_planificador(modo="Semanal"):
                     with c_acc:
                         acc_adm = st.text_input(f"Detalle gestión {i}:", placeholder="Capacitaciones, comités...", key=f"txt_adm_{i}")
                     with c_fec:
-                        fec_adm_range = st.date_input(f"Rango {i}:", value=(datetime.now(), datetime.now()), key=f"fec_adm_{i}")
+                        fec_adm_range = st.date_input(f"Rango {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fec_adm_{i}")
                     
                     if acc_adm.strip():
                         adm_dates = []
@@ -662,7 +667,7 @@ def vista_planificador(modo="Semanal"):
                                 "categoria": "Gestión Administrativa", "numero_caso": "N/A", "asegurado": "N/A", "tramo_uf": "N/A", 
                                 "honorarios_estimados": 0.0, "estado_proyectado": "N/A", "subestado_proyectado": "N/A", 
                                 "accion": acc_adm.strip(), "fecha_compromiso": dt.strftime("%Y-%m-%d"), 
-                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                "estado_cumplimiento": "Pendiente", "fecha_planificacion": ahora_chile.strftime("%Y-%m-%d %H:%M:%S")
                             })
 
             st.markdown("---")
