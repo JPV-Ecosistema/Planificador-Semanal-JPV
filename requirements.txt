@@ -7,3 +7,4 @@ google-auth
 plotly
 matplotlib
 holidays
+pytz
