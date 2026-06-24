@@ -1074,7 +1074,7 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
-# VERSIÓN: 4.3.8 (Gráficos de Torta UI/Word en Inventario)
+# VERSIÓN: 4.3.9 (Optimización Visual de Tortas para Word)
 # ---------------------------------------------------------
 def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     import io
@@ -1182,12 +1182,14 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         df_entregables['accion'] = df_entregables['accion'].str.replace('Preparar Informe - ', '', regex=False)
         df_entregables['accion'] = df_entregables['accion'].str.replace('Reunión - ', '', regex=False)
         
-        # --- GRÁFICOS DE TORTA (UI Web) ---
+        # --- GRÁFICOS DE TORTA (UI Web y Orden de Magnitud) ---
         df_pie_qty = df_entregables['accion'].value_counts().reset_index()
         df_pie_qty.columns = ['Entregable', 'Cantidad']
+        df_pie_qty = df_pie_qty.sort_values(by='Cantidad', ascending=False)
         
         df_pie_uf = df_entregables.groupby('accion')['honorarios_estimados'].sum().reset_index()
         df_pie_uf.columns = ['Entregable', 'UF']
+        df_pie_uf = df_pie_uf.sort_values(by='UF', ascending=False)
         
         fig_qty = px.pie(df_pie_qty, values='Cantidad', names='Entregable', title='Distribución por Cantidad de Entregables', hole=0.3)
         fig_qty.update_traces(textposition='inside', textinfo='percent+label')
@@ -1366,7 +1368,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                 row_cells[i].text = str(val)
         dash_doc.add_paragraph("")
     
-    # 4. Tabla Entregables con Gráficos de Torta
+    # 4. Tabla Entregables con Gráficos de Torta (Optimizados)
     if not df_mostrar.empty:
         dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
         
@@ -1374,10 +1376,23 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         def generar_torta_estatica(labels, sizes, titulo):
             import matplotlib.pyplot as plt
             import io
-            fig, ax = plt.subplots(figsize=(4, 3))
-            wedges, texts, autotexts = ax.pie(sizes, autopct='%1.1f%%', startangle=90, textprops=dict(color="w", weight="bold", fontsize=8))
-            ax.legend(wedges, labels, title="Entregables", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), fontsize=7)
-            ax.set_title(titulo, fontsize=11, color='#003366', fontweight='bold')
+            fig, ax = plt.subplots(figsize=(6, 5))
+            wedges, texts, autotexts = ax.pie(
+                sizes, 
+                autopct='%1.1f%%', 
+                startangle=90, 
+                pctdistance=0.75,
+                textprops=dict(color="w", weight="bold", fontsize=9),
+                wedgeprops=dict(edgecolor='w', linewidth=1)
+            )
+            ax.legend(
+                wedges, labels, 
+                title="Entregables", 
+                loc="upper center", 
+                bbox_to_anchor=(0.5, -0.05), 
+                fontsize=9
+            )
+            ax.set_title(titulo, fontsize=12, color='#003366', fontweight='bold', pad=15)
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
             plt.close(fig)
@@ -1470,6 +1485,8 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
             file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
+
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # VERSIÓN: 4.4.3 (Filtro Inteligente + ID Únicos para Gráficos)
