@@ -1785,7 +1785,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.7 (Inyección Visual de Actividades Adicionales en Celeste)
+# VERSIÓN: 4.5.8 (Arquitectura por División, Paginación y Carátulas Individuales)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1823,18 +1823,26 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
 
-        df_operativa = df_operativa.sort_values(by=['Ajustador', 'numero_caso', 'fecha_compromiso'])
-        df_gantt_visual = df_operativa.pivot_table(
-            index=['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'estado_proyectado'], 
-            columns='fecha_compromiso', 
-            values='accion', 
-            aggfunc=lambda x: ' | '.join(x)
-        ).fillna('')
-        
-        # --- CÁLCULO DE TOTALES PARA CARÁTULA (Estricto por Caso para no duplicar UF) ---
+        # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA (Columna D / Índice 3) ---
+        df_maestro = load_master_base()
+        dict_divisiones = {}
+        if df_maestro is not None and not df_maestro.empty:
+            try:
+                col_div = df_maestro.columns[3] # Columna D
+                col_aj = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
+                for _, row in df_maestro.iterrows():
+                    aj_name = str(row[col_aj]).strip()
+                    div_name = str(row[col_div]).strip()
+                    if aj_name and div_name:
+                        dict_divisiones[aj_name] = div_name
+            except Exception:
+                pass
+                
+        df_operativa['Division'] = df_operativa['Ajustador'].apply(lambda x: dict_divisiones.get(str(x).strip(), 'Sin División Asignada'))
+
+        # --- CÁLCULO DE TOTALES GLOBALES PARA CARÁTULA (Estricto por Caso) ---
         uf_ifl_total = 0.0
         uf_wip_total = 0.0
-        
         casos_agrupados = df_operativa.groupby(['Ajustador', 'numero_caso'])
         
         for (ajustador, caso), group in casos_agrupados:
@@ -1844,62 +1852,64 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 uf_val = 0.0
                 
             acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
-            
             if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
                 uf_ifl_total += uf_val
             else:
                 uf_wip_total += uf_val
 
         # --- VISUALIZACIÓN UI (STREAMLIT) ---
-        st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la división)")
+        st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la gerencia)")
         
         c_ui1, c_ui2 = st.columns(2)
         with c_ui1:
             st.markdown(f"""
             <div style='background-color: #28a745; padding: 25px; border-radius: 8px; text-align: center; margin-bottom: 20px;'>
-                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>IFL Comprometidos de la Semana</div>
+                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>IFL Comprometidos Globales</div>
                 <div style='color: white; font-size: 30px; font-weight: bold;'>{uf_ifl_total:,.2f} UF</div>
             </div>
             """, unsafe_allow_html=True)
         with c_ui2:
             st.markdown(f"""
             <div style='background-color: #004A99; padding: 25px; border-radius: 8px; text-align: center; margin-bottom: 20px;'>
-                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>WIP Comprometidos de la Semana</div>
+                <div style='color: white; font-size: 18px; font-weight: bold; margin-bottom: 5px;'>WIP Comprometidos Globales</div>
                 <div style='color: white; font-size: 30px; font-weight: bold;'>{uf_wip_total:,.2f} UF</div>
             </div>
             """, unsafe_allow_html=True)
 
-        st.dataframe(df_gantt_visual, use_container_width=True)
-
-        # --- AGRUPACIÓN MAESTRA DE TAREAS PARA EXPORTACIÓN GANTT ---
-        grouped_gantt = df_operativa.groupby(['Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
+        df_gantt_visual = df_operativa.sort_values(by=['Division', 'Ajustador', 'numero_caso', 'fecha_compromiso'])
+        df_gantt_ui = df_gantt_visual.pivot_table(
+            index=['Division', 'Ajustador', 'numero_caso', 'Nick Name', 'asegurado'], 
+            columns='fecha_compromiso', 
+            values='accion', 
+            aggfunc=lambda x: ' | '.join(x)
+        ).fillna('')
+        st.dataframe(df_gantt_ui, use_container_width=True)
 
         dias_habiles_target = [d for d in dias_semana_target if d.weekday() < 5]
 
-        # Exportación Excel Gantt
+        # --- EXPORTACIÓN EXCEL GANTT ---
         wb = Workbook()
         ws = wb.active
         ws.title = "Plan Semanal Gantt"
         
-        encabezados = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"]
+        encabezados = ["División", "Ajustador", "Caso", "Nick Name", "Asegurado", "Acción y Entregable"]
         for f in dias_habiles_target:
             encabezados.append(f.strftime('%A %d-%m'))
         encabezados.append("Hon UF")
         ws.append(encabezados)
         
-        for name, group in grouped_gantt:
+        grouped_gantt_xl = df_operativa.groupby(['Division', 'Ajustador', 'numero_caso', 'Nick Name', 'asegurado', 'accion'])
+        for name, group in grouped_gantt_xl:
             row = list(name)
             for f in dias_habiles_target:
                 if f in group['fecha_compromiso'].values:
                     row.append("X")
                 else:
                     row.append("")
-                    
             try:
                 total_honorarios = float(group['honorarios_estimados'].max())
             except:
                 total_honorarios = 0.0
-                
             row.append(round(total_honorarios, 2))
             ws.append(row)
             
@@ -1908,11 +1918,10 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             cell.fill = header_fill
             cell.font = Font(color="FFFFFF", bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center")
-            
         excel_buffer = io.BytesIO()
         wb.save(excel_buffer)
         
-        # Exportación Word Gantt
+        # --- EXPORTACIÓN WORD GANTT (NUEVA ARQUITECTURA PAGINADA) ---
         doc = Document()
         section = doc.sections[-1]
         
@@ -1929,7 +1938,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         doc.add_heading(f'📊 Reporte Consolidado de Planificación Semanal - {week_id_obj}', 0)
         
-        # --- CARÁTULA INICIAL (CAJAS DE UF EN WORD) ---
+        # Carátula Global
         t_caratula = doc.add_table(rows=1, cols=2)
         t_caratula.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
@@ -1940,11 +1949,10 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         p_ifl.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r_ifl_title = p_ifl.add_run("IFL Comprometidos de la Semana\n")
         r_ifl_title.font.color.rgb = RGBColor(255, 255, 255)
-        r_ifl_title.font.size = Pt(14)
         r_ifl_title.font.bold = True
         r_ifl_val = p_ifl.add_run(f"{uf_ifl_total:,.2f} UF")
         r_ifl_val.font.color.rgb = RGBColor(255, 255, 255)
-        r_ifl_val.font.size = Pt(30)
+        r_ifl_val.font.size = Pt(24)
         r_ifl_val.font.bold = True
         
         c_wip = t_caratula.rows[0].cells[1]
@@ -1954,154 +1962,171 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         p_wip.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r_wip_title = p_wip.add_run("WIP Comprometidos de la Semana\n")
         r_wip_title.font.color.rgb = RGBColor(255, 255, 255)
-        r_wip_title.font.size = Pt(14)
         r_wip_title.font.bold = True
         r_wip_val = p_wip.add_run(f"{uf_wip_total:,.2f} UF")
         r_wip_val.font.color.rgb = RGBColor(255, 255, 255)
-        r_wip_val.font.size = Pt(30)
+        r_wip_val.font.size = Pt(24)
         r_wip_val.font.bold = True
 
         doc.add_paragraph("")
-        doc.add_paragraph("")
         
-        # --- LEYENDA DE COLORES EN WORD ACTUALIZADA ---
         leyenda = doc.add_paragraph()
         run_g = leyenda.add_run("🟢 Verde: ")
         run_g.bold = True
-        leyenda.add_run("Ejecutado a tiempo   |   ")
-        
+        leyenda.add_run("A tiempo  |  ")
         run_y = leyenda.add_run("🟡 Amarillo: ")
         run_y.bold = True
-        leyenda.add_run("Ejecutado con atraso   |   ")
-        
+        leyenda.add_run("Con atraso  |  ")
         run_c = leyenda.add_run("🔵 Celeste: ")
         run_c.bold = True
-        leyenda.add_run("Actividad Adicional (Fuera de plazo)   |   ")
-        
+        leyenda.add_run("Fuera de plazo oficial  |  ")
         run_r = leyenda.add_run("🔴 Rojo con X: ")
         run_r.bold = True
-        leyenda.add_run("No ejecutado   |   ")
-        
+        leyenda.add_run("No ejecutado  |  ")
         run_p = leyenda.add_run("🟩 Verde vacío: ")
         run_p.bold = True
         leyenda.add_run("Programado (Futuro)")
-        
         leyenda.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        doc.add_paragraph("")
         
-        headers_word = ["Ajustador", "Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
-        table = doc.add_table(rows=1, cols=len(headers_word))
-        table.style = 'Table Grid'
-        
-        tr = table.rows[0]._tr
-        trPr = tr.get_or_add_trPr()
-        tblHeader = parse_xml(r'<w:tblHeader {} w:val="true"/>'.format(nsdecls('w')))
-        trPr.append(tblHeader)
-        
-        for i, title in enumerate(headers_word):
-            table.rows[0].cells[i].text = title
-            table.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
-            table.rows[0].cells[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
-            table.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
-            table.rows[0].cells[i]._tc.get_or_add_tcPr().append(shading_elm)
-            
-        ajustador_previo = ""
-        caso_previo = ""
         hoy = datetime.now().date()
+        headers_word = ["Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
+
+        # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR ---
+        divisiones = sorted(df_operativa['Division'].unique())
         
-        # ITERACIÓN INTELIGENTE (1 FILA = 1 TAREA)
-        for name, group in grouped_gantt:
-            ajustador_actual, caso_actual, nickname, asegurado, accion = name
-            row_cells = table.add_row().cells
+        for div in divisiones:
+            df_div = df_operativa[df_operativa['Division'] == div]
+            ajustadores_div = sorted(df_div['Ajustador'].unique())
             
-            if ajustador_actual == ajustador_previo:
-                row_cells[0].text = ""
-                if caso_actual == caso_previo:
-                    row_cells[1].text = ""
-                    row_cells[2].text = ""
-                    row_cells[3].text = ""
-                else:
-                    row_cells[1].text = str(caso_actual)
-                    row_cells[2].text = str(nickname)
-                    row_cells[3].text = str(asegurado)
-            else:
-                row_cells[0].text = str(ajustador_actual)
-                row_cells[1].text = str(caso_actual)
-                row_cells[2].text = str(nickname)
-                row_cells[3].text = str(asegurado)
+            for aj in ajustadores_div:
+                doc.add_page_break()
+                doc.add_heading(f"{div} | Ajustador: {aj}", level=2)
                 
-            ajustador_previo = ajustador_actual
-            caso_previo = caso_actual
-            
-            row_cells[4].text = str(accion)
-            
-            for i_date, f_date in enumerate(dias_habiles_target):
-                col_idx = 5 + i_date
-                match = group[group['fecha_compromiso'] == f_date]
+                df_aj = df_div[df_div['Ajustador'] == aj]
                 
-                if not match.empty:
-                    row_data = match.iloc[0]
-                    estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
-                    fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
-                    tipo_actividad_gantt = str(row_data.get('tipo_actividad', ''))
-                    
-                    es_pasado = f_date < hoy
-                    es_adicional = (tipo_actividad_gantt == 'Actividad Adicional')
-                    
-                    if es_pasado:
-                        if estado_cumplimiento == 'Realizado':
-                            row_cells[col_idx].text = "✔"
-                            es_atrasada = False
-                            if pd.notna(fecha_ejec_str) and str(fecha_ejec_str).strip() not in ['', 'nan']:
-                                try:
-                                    fecha_ejec_dt = pd.to_datetime(fecha_ejec_str).date()
-                                    if fecha_ejec_dt > f_date:
-                                        es_atrasada = True
-                                except: pass
-                                
-                            if es_adicional:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste
-                            elif es_atrasada:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w'))) # Amarillo
-                            else:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
-                        else:
-                            row_cells[col_idx].text = "X"
-                            shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w'))) # Rojo
+                # Cálculo Financiero Individual Estricto
+                aj_ifl = 0.0
+                aj_wip = 0.0
+                for caso, group in df_aj.groupby('numero_caso'):
+                    try: uf_val = float(group['honorarios_estimados'].max())
+                    except: uf_val = 0.0
+                    acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
+                    if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
+                        aj_ifl += uf_val
                     else:
-                        if estado_cumplimiento == 'Realizado':
-                            row_cells[col_idx].text = "✔"
-                            if es_adicional:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste
+                        aj_wip += uf_val
+
+                # Barra Azul Individual
+                t_bar = doc.add_table(rows=1, cols=1)
+                c_bar = t_bar.rows[0].cells[0]
+                shd_bar = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
+                c_bar._tc.get_or_add_tcPr().append(shd_bar)
+                p_bar = c_bar.paragraphs[0]
+                p_bar.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                r_bar = p_bar.add_run(f"RESUMEN SEMANAL  ||  IFL: {aj_ifl:,.2f} UF  |  WIP: {aj_wip:,.2f} UF")
+                r_bar.font.color.rgb = RGBColor(255, 255, 255)
+                r_bar.font.bold = True
+                r_bar.font.size = Pt(12)
+                doc.add_paragraph("")
+
+                # Tabla Gantt Individual
+                table = doc.add_table(rows=1, cols=len(headers_word))
+                table.style = 'Table Grid'
+                tr = table.rows[0]._tr
+                trPr = tr.get_or_add_trPr()
+                tblHeader = parse_xml(r'<w:tblHeader {} w:val="true"/>'.format(nsdecls('w')))
+                trPr.append(tblHeader)
+                
+                for i, title in enumerate(headers_word):
+                    table.rows[0].cells[i].text = title
+                    table.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+                    table.rows[0].cells[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
+                    table.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+                    table.rows[0].cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+                caso_previo = ""
+                grouped_aj = df_aj.groupby(['numero_caso', 'Nick Name', 'asegurado', 'accion'])
+                
+                for name, group in grouped_aj:
+                    caso_actual, nickname, asegurado, accion = name
+                    row_cells = table.add_row().cells
+                    
+                    if caso_actual == caso_previo:
+                        row_cells[0].text = ""
+                        row_cells[1].text = ""
+                        row_cells[2].text = ""
+                    else:
+                        row_cells[0].text = str(caso_actual)
+                        row_cells[1].text = str(nickname)
+                        row_cells[2].text = str(asegurado)
+                        
+                    caso_previo = caso_actual
+                    row_cells[3].text = str(accion)
+                    
+                    for i_date, f_date in enumerate(dias_habiles_target):
+                        col_idx = 4 + i_date
+                        match = group[group['fecha_compromiso'] == f_date]
+                        
+                        if not match.empty:
+                            row_data = match.iloc[0]
+                            estado_cumplimiento = str(row_data.get('estado_cumplimiento', ''))
+                            fecha_ejec_str = str(row_data.get('fecha_ejecucion', ''))
+                            tipo_actividad_gantt = str(row_data.get('tipo_actividad', ''))
+                            
+                            es_pasado = f_date < hoy
+                            es_adicional = (tipo_actividad_gantt == 'Actividad Adicional')
+                            
+                            if es_pasado:
+                                if estado_cumplimiento == 'Realizado':
+                                    row_cells[col_idx].text = "✔"
+                                    es_atrasada = False
+                                    if pd.notna(fecha_ejec_str) and str(fecha_ejec_str).strip() not in ['', 'nan']:
+                                        try:
+                                            fecha_ejec_dt = pd.to_datetime(fecha_ejec_str).date()
+                                            if fecha_ejec_dt > f_date: es_atrasada = True
+                                        except: pass
+                                        
+                                    if es_adicional:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w')))
+                                    elif es_atrasada:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="F0AD4E"/>'.format(nsdecls('w')))
+                                    else:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                                else:
+                                    row_cells[col_idx].text = "X"
+                                    shading_elm = parse_xml(r'<w:shd {} w:fill="D9534F"/>'.format(nsdecls('w')))
                             else:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde
+                                if estado_cumplimiento == 'Realizado':
+                                    row_cells[col_idx].text = "✔"
+                                    if es_adicional:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w')))
+                                    else:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                                else:
+                                    row_cells[col_idx].text = ""
+                                    if es_adicional:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w')))
+                                    else:
+                                        shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w')))
+                                    
+                            row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
                         else:
                             row_cells[col_idx].text = ""
-                            if es_adicional:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="5BC0DE"/>'.format(nsdecls('w'))) # Celeste vacío
-                            else:
-                                shading_elm = parse_xml(r'<w:shd {} w:fill="217346"/>'.format(nsdecls('w'))) # Verde vacío
-                            
-                    row_cells[col_idx]._tc.get_or_add_tcPr().append(shading_elm)
-                else:
-                    row_cells[col_idx].text = ""
-            
-            try:
-                val_uf = float(group['honorarios_estimados'].max())
-                if val_uf > 0:
-                    row_cells[10].text = f"{val_uf:,.2f}"
-                else:
-                    row_cells[10].text = "-"
-            except: 
-                row_cells[10].text = "-"
+                    
+                    try:
+                        val_uf = float(group['honorarios_estimados'].max())
+                        if val_uf > 0: row_cells[9].text = f"{val_uf:,.2f}"
+                        else: row_cells[9].text = "-"
+                    except: 
+                        row_cells[9].text = "-"
 
-            for i, cell in enumerate(row_cells):
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs: 
-                        run.font.size = Pt(7.5)
-                    if i >= 5: 
-                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    for i, cell in enumerate(row_cells):
+                        for paragraph in cell.paragraphs:
+                            for run in paragraph.runs: 
+                                run.font.size = Pt(7.5)
+                            if i >= 4: 
+                                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         word_buffer = io.BytesIO()
         doc.save(word_buffer)
