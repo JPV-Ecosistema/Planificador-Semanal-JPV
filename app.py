@@ -1785,10 +1785,12 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.8 (Arquitectura por División, Paginación y Carátulas Individuales)
+# VERSIÓN: 4.5.9 (Lectura silenciosa de Base Maestra para Divisiones)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
+    import os
+    import json
     import pandas as pd
     import streamlit as st
     from openpyxl import Workbook
@@ -1823,18 +1825,23 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
 
-        # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA (Columna D / Índice 3) ---
-        df_maestro = load_master_base()
+        # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA (Lectura Silenciosa en Disco) ---
         dict_divisiones = {}
-        if df_maestro is not None and not df_maestro.empty:
+        # Usamos la constante global PERSISTENCE_DIR definida en el Bloque 0
+        filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+        if os.path.exists(filepath):
             try:
-                col_div = df_maestro.columns[3] # Columna D
-                col_aj = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
-                for _, row in df_maestro.iterrows():
-                    aj_name = str(row[col_aj]).strip()
-                    div_name = str(row[col_div]).strip()
-                    if aj_name and div_name:
-                        dict_divisiones[aj_name] = div_name
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    datos = json.load(f)
+                    df_maestro = pd.DataFrame(datos['data'])
+                    if not df_maestro.empty:
+                        col_div = df_maestro.columns[3] # Columna D
+                        col_aj = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
+                        for _, row in df_maestro.iterrows():
+                            aj_name = str(row[col_aj]).strip()
+                            div_name = str(row[col_div]).strip()
+                            if aj_name and div_name:
+                                dict_divisiones[aj_name] = div_name
             except Exception:
                 pass
                 
@@ -1921,7 +1928,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         excel_buffer = io.BytesIO()
         wb.save(excel_buffer)
         
-        # --- EXPORTACIÓN WORD GANTT (NUEVA ARQUITECTURA PAGINADA) ---
+        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA) ---
         doc = Document()
         section = doc.sections[-1]
         
