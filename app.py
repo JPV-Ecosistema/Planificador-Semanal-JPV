@@ -1785,7 +1785,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.11 (Aritmética Cuadrada y Etiqueta Celeste)
+# VERSIÓN: 4.5.12 (Gráficos de Torta de Origen Programado vs No Programado)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1793,6 +1793,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
     import json
     import pandas as pd
     import streamlit as st
+    import plotly.express as px
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from docx import Document
@@ -1825,7 +1826,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
 
-        # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA (Lectura Silenciosa en Disco) ---
+        # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA ---
         dict_divisiones = {}
         filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
         if os.path.exists(filepath):
@@ -1846,12 +1847,16 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 
         df_operativa['Division'] = df_operativa['Ajustador'].apply(lambda x: dict_divisiones.get(str(x).strip(), 'Sin División Asignada'))
 
-        # --- CÁLCULO DE TOTALES GLOBALES Y POR AJUSTADOR (Estricto por Caso) ---
+        # --- CÁLCULO DE TOTALES (Estricto por Caso y Determinación de Origen) ---
         uf_ifl_total = 0.0
         uf_wip_total = 0.0
         uf_mcl_total = 0.0
-        resumen_ajustadores = {}
         
+        # Sub-baldes para gráficos de torta
+        ifl_prog, ifl_noprog = 0.0, 0.0
+        wip_prog, wip_noprog = 0.0, 0.0
+        
+        resumen_ajustadores = {}
         casos_agrupados = df_operativa.groupby(['Division', 'Ajustador', 'numero_caso'])
         
         for (division, ajustador, caso), group in casos_agrupados:
@@ -1865,11 +1870,19 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             
             tramo_str = str(group['tramo_uf'].iloc[0]).lower()
             es_mcl = 'mcl' in tramo_str or '> 5' in tramo_str
+            
+            # Lógica de Origen: Si al menos 1 tarea del caso es Programada, se cuenta como Programado
+            tipos_act = group['tipo_actividad'].astype(str).tolist()
+            es_programado = any(t == 'Programada' for t in tipos_act)
 
             if es_ifl:
                 uf_ifl_total += uf_val
+                if es_programado: ifl_prog += uf_val
+                else: ifl_noprog += uf_val
             else:
                 uf_wip_total += uf_val
+                if es_programado: wip_prog += uf_val
+                else: wip_noprog += uf_val
                 
             if es_mcl:
                 uf_mcl_total += uf_val
@@ -1877,14 +1890,9 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             if ajustador not in resumen_ajustadores:
                 resumen_ajustadores[ajustador] = {'Division': division, 'IFL': 0.0, 'WIP': 0.0, 'MCL': 0.0, 'Total': 0.0}
 
-            if es_ifl:
-                resumen_ajustadores[ajustador]['IFL'] += uf_val
-            else:
-                resumen_ajustadores[ajustador]['WIP'] += uf_val
-                
-            if es_mcl:
-                resumen_ajustadores[ajustador]['MCL'] += uf_val
-                
+            if es_ifl: resumen_ajustadores[ajustador]['IFL'] += uf_val
+            else: resumen_ajustadores[ajustador]['WIP'] += uf_val
+            if es_mcl: resumen_ajustadores[ajustador]['MCL'] += uf_val
             resumen_ajustadores[ajustador]['Total'] += uf_val
 
         # --- VISUALIZACIÓN UI (STREAMLIT) ---
@@ -1905,6 +1913,28 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 <div style='color: white; font-size: 30px; font-weight: bold;'>{uf_wip_total:,.2f} UF</div>
             </div>
             """, unsafe_allow_html=True)
+
+        # Gráficos de Torta UI
+        col_pie1, col_pie2 = st.columns(2)
+        
+        df_pie_ifl = pd.DataFrame([['Plan Oficial', ifl_prog], ['Urgencia / No Prog', ifl_noprog]], columns=['Origen', 'UF'])
+        df_pie_wip = pd.DataFrame([['Plan Oficial', wip_prog], ['Urgencia / No Prog', wip_noprog]], columns=['Origen', 'UF'])
+        
+        colores_torta = {'Plan Oficial': '#217346', 'Urgencia / No Prog': '#5BC0DE'}
+        
+        with col_pie1:
+            if uf_ifl_total > 0:
+                fig_ifl = px.pie(df_pie_ifl, values='UF', names='Origen', title='Composición IFL (Programado vs Urgencias)', hole=0.3, color='Origen', color_discrete_map=colores_torta)
+                fig_ifl.update_traces(textposition='inside', textinfo='percent+label')
+                fig_ifl.update_layout(showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+                st.plotly_chart(fig_ifl, use_container_width=True, key=f"gantt_pie_ifl_{target_week_id}")
+            
+        with col_pie2:
+            if uf_wip_total > 0:
+                fig_wip = px.pie(df_pie_wip, values='UF', names='Origen', title='Composición WIP (Programado vs Urgencias)', hole=0.3, color='Origen', color_discrete_map=colores_torta)
+                fig_wip.update_traces(textposition='inside', textinfo='percent+label')
+                fig_wip.update_layout(showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+                st.plotly_chart(fig_wip, use_container_width=True, key=f"gantt_pie_wip_{target_week_id}")
 
         df_gantt_visual = df_operativa.sort_values(by=['Division', 'Ajustador', 'numero_caso', 'fecha_compromiso'])
         df_gantt_ui = df_gantt_visual.pivot_table(
@@ -1951,7 +1981,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         excel_buffer = io.BytesIO()
         wb.save(excel_buffer)
         
-        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA Y RESUMEN REORDENADO) ---
+        # --- EXPORTACIÓN WORD GANTT (PORTADA CON GRÁFICOS MATPLOTLIB) ---
         doc = Document()
         section = doc.sections[-1]
         
@@ -2000,7 +2030,54 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         doc.add_paragraph("")
         
-        # --- TABLA DE RESUMEN POR AJUSTADOR (HOJA 1 REORDENADA) ---
+        # --- INYECCIÓN DE GRÁFICOS DE TORTA ESTÁTICOS EN WORD ---
+        def generar_torta_estatica(sizes, titulo):
+            import matplotlib.pyplot as plt
+            import io
+            fig, ax = plt.subplots(figsize=(4.5, 3.2))
+            # Tamaños: [Programado, No Programado]
+            wedges, texts, autotexts = ax.pie(
+                sizes, 
+                autopct='%1.1f%%', 
+                startangle=90, 
+                pctdistance=0.75,
+                colors=['#217346', '#5BC0DE'], # Verde, Celeste
+                textprops=dict(color="w", weight="bold", fontsize=9),
+                wedgeprops=dict(edgecolor='w', linewidth=1)
+            )
+            ax.legend(
+                wedges, ['Plan Oficial', 'Urgencias'], 
+                loc="upper center", 
+                bbox_to_anchor=(0.5, -0.05), 
+                fontsize=9
+            )
+            ax.set_title(titulo, fontsize=11, color='#003366', fontweight='bold', pad=15)
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+            plt.close(fig)
+            return buf.getvalue()
+            
+        try:
+            t_pies = doc.add_table(rows=1, cols=2)
+            t_pies.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            if uf_ifl_total > 0:
+                img_ifl = generar_torta_estatica([ifl_prog, ifl_noprog], "Origen de IFL (UF)")
+                c_pie_ifl = t_pies.rows[0].cells[0]
+                c_pie_ifl.paragraphs[0].add_run().add_picture(io.BytesIO(img_ifl), width=Cm(8))
+                c_pie_ifl.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+            if uf_wip_total > 0:
+                img_wip = generar_torta_estatica([wip_prog, wip_noprog], "Origen de WIP (UF)")
+                c_pie_wip = t_pies.rows[0].cells[1]
+                c_pie_wip.paragraphs[0].add_run().add_picture(io.BytesIO(img_wip), width=Cm(8))
+                c_pie_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+            doc.add_paragraph("")
+        except Exception:
+            pass
+        
+        # --- TABLA DE RESUMEN POR AJUSTADOR ---
         doc.add_heading("📋 Resumen de Carga de Trabajo Operativo", level=2)
         t_resumen = doc.add_table(rows=1, cols=6)
         t_resumen.style = 'Table Grid'
@@ -2014,7 +2091,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             shading_elm = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
             t_resumen.rows[0].cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-        # Ordenar por División y luego por Ajustador
         resumen_ordenado = sorted(resumen_ajustadores.items(), key=lambda x: (x[1]['Division'], x[0]))
 
         for aj, data in resumen_ordenado:
@@ -2029,7 +2105,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             for i in range(2, 6):
                 row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
-        # Fila de Totales Gerenciales para cuadre aritmético
         row_tot = t_resumen.add_row().cells
         row_tot[0].text = "TOTAL GERENCIA"
         row_tot[1].text = ""
@@ -2073,7 +2148,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         hoy = datetime.now().date()
         headers_word = ["Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
 
-        # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR (HOJAS SIGUIENTES) ---
+        # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR ---
         divisiones = sorted(df_operativa['Division'].unique())
         
         for div in divisiones:
