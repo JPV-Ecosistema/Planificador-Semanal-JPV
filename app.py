@@ -700,7 +700,7 @@ def vista_planificador(modo="Semanal"):
 
 # ---------------------------------------------------------
 # BLOQUE 3: VISTA - PROGRAMA DIARIO (EJECUCIÓN Y NO PROGRAMADOS)
-# VERSIÓN: 2.4.2 (Sincronización Inteligente y Autocompletado de Casos)
+# VERSIÓN: 2.4.3 (Autocompletado con Herencia Financiera UF)
 # ---------------------------------------------------------
 def vista_diario():
     import json
@@ -754,7 +754,7 @@ def vista_diario():
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
         
-        # --- CARGA DE CASOS PARA AUTOCOMPLETADO ---
+        # --- CARGA DE CASOS PARA AUTOCOMPLETADO (INCLUYE UF) ---
         opciones_casos = ["Gestión Manual (Caso fuera de sistema)"]
         dict_casos = {}
         if df_maestro is not None and not df_maestro.empty:
@@ -764,13 +764,28 @@ def vista_diario():
                 if num:
                     aseg = str(row.get('Asegurado', '')).strip()
                     nick = str(row.get('Nickname', '')).strip()
+                    
+                    # Rescate de honorarios para herencia automática
+                    tramo, is_mcl = calcular_tramo_mcl(row)
+                    honorarios = 0.0
+                    try:
+                        if len(df_maestro.columns) >= 67:
+                            valor_bo = row.iloc[66]
+                            honorarios = limpiar_monto_mcl(valor_bo)
+                    except: pass
+                    
                     lbl = f"[{num}] {aseg}"
                     if nick:
                         lbl += f" - [{nick}]"
                     opciones_casos.append(lbl)
-                    dict_casos[lbl] = {"caso": num, "asegurado": aseg}
+                    dict_casos[lbl] = {
+                        "caso": num, 
+                        "asegurado": aseg,
+                        "tramo": tramo,
+                        "honorarios": honorarios
+                    }
 
-        # --- MÓDULO DE ACTIVIDADES NO PROGRAMADAS (INGRESO MÚLTIPLE) ---
+        # --- MÓDULO DE ACTIVIDADES NO PROGRAMADAS ---
         st.markdown("---")
         with st.expander("➕ REGISTRAR ACTIVIDADES NO PROGRAMADAS (Urgencias / Fuera de Plan)", expanded=False):
             st.info("Utilice este módulo para reportar gestiones inmediatas que no estaban en su planificación original. Estas impactan positivamente en su métrica de cumplimiento global.")
@@ -789,9 +804,14 @@ def vista_diario():
                     if seleccion_caso == "Gestión Manual (Caso fuera de sistema)":
                         np_caso = st.text_input(f"Número de Caso (o Ref) {i}:", key=f"np_caso_{i}")
                         np_asegurado = st.text_input(f"Asegurado {i}:", key=f"np_aseg_{i}")
+                        np_tramo = "N/D"
+                        np_honorarios = 0.0
                     else:
                         np_caso = dict_casos[seleccion_caso]["caso"]
                         np_asegurado = dict_casos[seleccion_caso]["asegurado"]
+                        np_tramo = dict_casos[seleccion_caso]["tramo"]
+                        np_honorarios = dict_casos[seleccion_caso]["honorarios"]
+                        
                         st.text_input(f"Número de Caso {i}:", value=np_caso, disabled=True, key=f"np_caso_dis_{i}")
                         st.text_input(f"Asegurado {i}:", value=np_asegurado, disabled=True, key=f"np_aseg_dis_{i}")
                         
@@ -799,7 +819,6 @@ def vista_diario():
                     np_accion = st.text_input(f"Acción Ejecutada {i}:", key=f"np_acc_{i}")
                     np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=datetime.now(), key=f"np_fec_{i}")
                 
-                # Solo preparamos el registro si llenaron los datos mínimos clave
                 if np_caso.strip() and np_accion.strip():
                     nuevas_actividades.append({
                         "id_transaccion": str(uuid.uuid4()),
@@ -808,8 +827,8 @@ def vista_diario():
                         "categoria": "Operativa",
                         "numero_caso": str(np_caso),
                         "asegurado": str(np_asegurado),
-                        "tramo_uf": "N/D",
-                        "honorarios_estimados": 0.0, 
+                        "tramo_uf": np_tramo,
+                        "honorarios_estimados": float(np_honorarios), 
                         "estado_proyectado": "N/D",
                         "subestado_proyectado": "N/D",
                         "accion": np_accion,
@@ -956,6 +975,7 @@ def vista_diario():
             progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
             st.progress(progreso)
             st.caption(f"Avance de cumplimiento global: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
+
 
 # =========================================================
 # MÓDULO 4: REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
