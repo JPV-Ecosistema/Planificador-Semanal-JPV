@@ -1785,7 +1785,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.10 (Resumen de Carga de Trabajo y Etiqueta Celeste)
+# VERSIÓN: 4.5.11 (Aritmética Cuadrada y Etiqueta Celeste)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1951,7 +1951,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         excel_buffer = io.BytesIO()
         wb.save(excel_buffer)
         
-        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA Y RESUMEN) ---
+        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA Y RESUMEN REORDENADO) ---
         doc = Document()
         section = doc.sections[-1]
         
@@ -2000,11 +2000,11 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         doc.add_paragraph("")
         
-        # --- NUEVO: TABLA DE RESUMEN POR AJUSTADOR (HOJA 1) ---
+        # --- TABLA DE RESUMEN POR AJUSTADOR (HOJA 1 REORDENADA) ---
         doc.add_heading("📋 Resumen de Carga de Trabajo Operativo", level=2)
         t_resumen = doc.add_table(rows=1, cols=6)
         t_resumen.style = 'Table Grid'
-        encabezados_resumen = ["División", "Ajustador", "IFL (UF)", "Ajustes/WIP (UF)", "MCL (UF)", "Total Cartera (UF)"]
+        encabezados_resumen = ["División", "Ajustador", "IFL (UF)", "Ajustes/WIP (UF)", "Total Cartera (UF)", ">> De los cuales MCL"]
         
         for i, title in enumerate(encabezados_resumen):
             t_resumen.rows[0].cells[i].text = title
@@ -2023,8 +2023,8 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             row_cells[1].text = aj
             row_cells[2].text = f"{data['IFL']:,.2f}"
             row_cells[3].text = f"{data['WIP']:,.2f}"
-            row_cells[4].text = f"{data['MCL']:,.2f}"
-            row_cells[5].text = f"{data['Total']:,.2f}"
+            row_cells[4].text = f"{data['Total']:,.2f}"
+            row_cells[5].text = f"{data['MCL']:,.2f}"
             
             for i in range(2, 6):
                 row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -2035,8 +2035,8 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         row_tot[1].text = ""
         row_tot[2].text = f"{uf_ifl_total:,.2f}"
         row_tot[3].text = f"{uf_wip_total:,.2f}"
-        row_tot[4].text = f"{uf_mcl_total:,.2f}"
-        row_tot[5].text = f"{(uf_ifl_total + uf_wip_total):,.2f}"
+        row_tot[4].text = f"{(uf_ifl_total + uf_wip_total):,.2f}"
+        row_tot[5].text = f"{uf_mcl_total:,.2f}"
         
         for i in range(6):
             if row_tot[i].paragraphs[0].runs:
