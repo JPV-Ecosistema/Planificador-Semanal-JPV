@@ -1785,7 +1785,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.9 (Lectura silenciosa de Base Maestra para Divisiones)
+# VERSIÓN: 4.5.10 (Resumen de Carga de Trabajo y Etiqueta Celeste)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1827,7 +1827,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA (Lectura Silenciosa en Disco) ---
         dict_divisiones = {}
-        # Usamos la constante global PERSISTENCE_DIR definida en el Bloque 0
         filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
         if os.path.exists(filepath):
             try:
@@ -1847,22 +1846,46 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 
         df_operativa['Division'] = df_operativa['Ajustador'].apply(lambda x: dict_divisiones.get(str(x).strip(), 'Sin División Asignada'))
 
-        # --- CÁLCULO DE TOTALES GLOBALES PARA CARÁTULA (Estricto por Caso) ---
+        # --- CÁLCULO DE TOTALES GLOBALES Y POR AJUSTADOR (Estricto por Caso) ---
         uf_ifl_total = 0.0
         uf_wip_total = 0.0
-        casos_agrupados = df_operativa.groupby(['Ajustador', 'numero_caso'])
+        uf_mcl_total = 0.0
+        resumen_ajustadores = {}
         
-        for (ajustador, caso), group in casos_agrupados:
+        casos_agrupados = df_operativa.groupby(['Division', 'Ajustador', 'numero_caso'])
+        
+        for (division, ajustador, caso), group in casos_agrupados:
             try:
                 uf_val = float(group['honorarios_estimados'].max())
             except:
                 uf_val = 0.0
                 
             acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
-            if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
+            es_ifl = 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso
+            
+            tramo_str = str(group['tramo_uf'].iloc[0]).lower()
+            es_mcl = 'mcl' in tramo_str or '> 5' in tramo_str
+
+            if es_ifl:
                 uf_ifl_total += uf_val
             else:
                 uf_wip_total += uf_val
+                
+            if es_mcl:
+                uf_mcl_total += uf_val
+
+            if ajustador not in resumen_ajustadores:
+                resumen_ajustadores[ajustador] = {'Division': division, 'IFL': 0.0, 'WIP': 0.0, 'MCL': 0.0, 'Total': 0.0}
+
+            if es_ifl:
+                resumen_ajustadores[ajustador]['IFL'] += uf_val
+            else:
+                resumen_ajustadores[ajustador]['WIP'] += uf_val
+                
+            if es_mcl:
+                resumen_ajustadores[ajustador]['MCL'] += uf_val
+                
+            resumen_ajustadores[ajustador]['Total'] += uf_val
 
         # --- VISUALIZACIÓN UI (STREAMLIT) ---
         st.subheader("🛠️ Gantt Operativo (Línea de tiempo de la gerencia)")
@@ -1928,7 +1951,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         excel_buffer = io.BytesIO()
         wb.save(excel_buffer)
         
-        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA) ---
+        # --- EXPORTACIÓN WORD GANTT (ARQUITECTURA PAGINADA Y RESUMEN) ---
         doc = Document()
         section = doc.sections[-1]
         
@@ -1977,6 +2000,58 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         doc.add_paragraph("")
         
+        # --- NUEVO: TABLA DE RESUMEN POR AJUSTADOR (HOJA 1) ---
+        doc.add_heading("📋 Resumen de Carga de Trabajo Operativo", level=2)
+        t_resumen = doc.add_table(rows=1, cols=6)
+        t_resumen.style = 'Table Grid'
+        encabezados_resumen = ["División", "Ajustador", "IFL (UF)", "Ajustes/WIP (UF)", "MCL (UF)", "Total Cartera (UF)"]
+        
+        for i, title in enumerate(encabezados_resumen):
+            t_resumen.rows[0].cells[i].text = title
+            t_resumen.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+            t_resumen.rows[0].cells[i].paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
+            t_resumen.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            shading_elm = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
+            t_resumen.rows[0].cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        # Ordenar por División y luego por Ajustador
+        resumen_ordenado = sorted(resumen_ajustadores.items(), key=lambda x: (x[1]['Division'], x[0]))
+
+        for aj, data in resumen_ordenado:
+            row_cells = t_resumen.add_row().cells
+            row_cells[0].text = data['Division']
+            row_cells[1].text = aj
+            row_cells[2].text = f"{data['IFL']:,.2f}"
+            row_cells[3].text = f"{data['WIP']:,.2f}"
+            row_cells[4].text = f"{data['MCL']:,.2f}"
+            row_cells[5].text = f"{data['Total']:,.2f}"
+            
+            for i in range(2, 6):
+                row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+        # Fila de Totales Gerenciales para cuadre aritmético
+        row_tot = t_resumen.add_row().cells
+        row_tot[0].text = "TOTAL GERENCIA"
+        row_tot[1].text = ""
+        row_tot[2].text = f"{uf_ifl_total:,.2f}"
+        row_tot[3].text = f"{uf_wip_total:,.2f}"
+        row_tot[4].text = f"{uf_mcl_total:,.2f}"
+        row_tot[5].text = f"{(uf_ifl_total + uf_wip_total):,.2f}"
+        
+        for i in range(6):
+            if row_tot[i].paragraphs[0].runs:
+                row_tot[i].paragraphs[0].runs[0].font.bold = True
+            else:
+                row_tot[i].paragraphs[0].add_run("").bold = True
+                
+            if i >= 2:
+                row_tot[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            shading_elm = parse_xml(r'<w:shd {} w:fill="E6F2FF"/>'.format(nsdecls('w')))
+            row_tot[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        doc.add_paragraph("")
+        
+        # --- LEYENDA DE COLORES EN WORD ---
         leyenda = doc.add_paragraph()
         run_g = leyenda.add_run("🟢 Verde: ")
         run_g.bold = True
@@ -1986,7 +2061,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         leyenda.add_run("Con atraso  |  ")
         run_c = leyenda.add_run("🔵 Celeste: ")
         run_c.bold = True
-        leyenda.add_run("Fuera de plazo oficial  |  ")
+        leyenda.add_run("Programado fuera del Plan Semanal  |  ")
         run_r = leyenda.add_run("🔴 Rojo con X: ")
         run_r.bold = True
         leyenda.add_run("No ejecutado  |  ")
@@ -1998,7 +2073,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         hoy = datetime.now().date()
         headers_word = ["Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
 
-        # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR ---
+        # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR (HOJAS SIGUIENTES) ---
         divisiones = sorted(df_operativa['Division'].unique())
         
         for div in divisiones:
@@ -2011,7 +2086,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 
                 df_aj = df_div[df_div['Ajustador'] == aj]
                 
-                # Cálculo Financiero Individual Estricto
+                # Cálculo Financiero Individual Estricto para la Barra Azul
                 aj_ifl = 0.0
                 aj_wip = 0.0
                 for caso, group in df_aj.groupby('numero_caso'):
@@ -2161,7 +2236,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             )
     else:
         st.info("No hay tareas operativas (casos) planificadas aún para esta semana.")
-
 
 # ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
