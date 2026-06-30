@@ -1805,7 +1805,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.12 (Gráficos de Torta de Origen Programado vs No Programado)
+# VERSIÓN: 4.5.15 (Aritmética Cuadrada, Etiqueta Celeste y Líneas Íntegras)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -1845,6 +1845,9 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 
         if 'estado_proyectado' not in df_operativa.columns:
             df_operativa['estado_proyectado'] = 'N/D'
+
+        # Limpieza crucial para que la suma aritmética no falle al leer strings
+        df_operativa['honorarios_estimados'] = pd.to_numeric(df_operativa['honorarios_estimados'], errors='coerce').fillna(0.0)
 
         # --- MAPEO DE DIVISIONES DESDE LA BASE MAESTRA ---
         dict_divisiones = {}
@@ -2119,7 +2122,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             row_cells[1].text = aj
             row_cells[2].text = f"{data['IFL']:,.2f}"
             row_cells[3].text = f"{data['WIP']:,.2f}"
-            row_cells[4].text = f"{data['Total']:,.2f}"
+            row_cells[4].text = f"{round((data['Total']), 2):,.2f}"
             row_cells[5].text = f"{data['MCL']:,.2f}"
             
             for i in range(2, 6):
@@ -2130,7 +2133,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         row_tot[1].text = ""
         row_tot[2].text = f"{uf_ifl_total:,.2f}"
         row_tot[3].text = f"{uf_wip_total:,.2f}"
-        row_tot[4].text = f"{(uf_ifl_total + uf_wip_total):,.2f}"
+        row_tot[4].text = f"{round((uf_ifl_total + uf_wip_total), 2):,.2f}"
         row_tot[5].text = f"{uf_mcl_total:,.2f}"
         
         for i in range(6):
@@ -2179,21 +2182,11 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 doc.add_page_break()
                 doc.add_heading(f"{div} | Ajustador: {aj}", level=2)
                 
-                df_aj = df_div[df_div['Ajustador'] == aj]
-                
-                # Cálculo Financiero Individual Estricto para la Barra Azul
-                aj_ifl = 0.0
-                aj_wip = 0.0
-                for caso, group in df_aj.groupby('numero_caso'):
-                    try: uf_val = float(group['honorarios_estimados'].max())
-                    except: uf_val = 0.0
-                    acciones_del_caso = " ".join(group['accion'].astype(str)).lower()
-                    if 'informe final de liquidación' in acciones_del_caso or 'carta de cobertura (rechazo)' in acciones_del_caso:
-                        aj_ifl += uf_val
-                    else:
-                        aj_wip += uf_val
+                # Rescate de los datos ya calculados del diccionario central
+                aj_data = resumen_ajustadores.get(aj, {'IFL': 0.0, 'WIP': 0.0})
+                aj_ifl = aj_data['IFL']
+                aj_wip = aj_data['WIP']
 
-                # Barra Azul Individual
                 t_bar = doc.add_table(rows=1, cols=1)
                 c_bar = t_bar.rows[0].cells[0]
                 shd_bar = parse_xml(r'<w:shd {} w:fill="004A99"/>'.format(nsdecls('w')))
@@ -2206,7 +2199,6 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                 r_bar.font.size = Pt(12)
                 doc.add_paragraph("")
 
-                # Tabla Gantt Individual
                 table = doc.add_table(rows=1, cols=len(headers_word))
                 table.style = 'Table Grid'
                 tr = table.rows[0]._tr
