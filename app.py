@@ -2393,6 +2393,136 @@ def vista_reportes():
         
     with tab_gantt:
         renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)# ---------------------------------------------------------
+# BLOQUE 4.6: REPORTE DE ENTREGABLES SEMANA PASADA (WORD)
+# VERSIÓN: 1.0.0
+# ---------------------------------------------------------
+def generar_reporte_entregables_word(df_week, week_id_obj):
+    import io
+    import os
+    import json
+    import pandas as pd
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
+
+    # Carga silenciosa de Base Maestra para rescatar Corredora y Aseguradora
+    dict_maestro = {}
+    filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    if os.path.exists(filepath_bm):
+        try:
+            with open(filepath_bm, 'r', encoding='utf-8') as f:
+                datos_bm = json.load(f)
+                df_bm = pd.DataFrame(datos_bm['data'])
+                for _, row in df_bm.iterrows():
+                    num = str(row.get('Número de caso', '')).strip()
+                    if num:
+                        dict_maestro[num] = {
+                            'corredora': str(row.get('Corredora', '')).strip(),
+                            'aseguradora': str(row.get('Compañía de seguros', '')).strip(),
+                        }
+        except Exception:
+            pass
+
+    doc = Document()
+    doc.add_heading(f'Reporte de Entregables - {week_id_obj}', 0)
+
+    # Filtrar solo tareas operativas con acción definida
+    df_informes = df_week[df_week['categoria'] == 'Operativa'].copy()
+    df_informes = df_informes[df_informes['accion'].str.strip() != '']
+
+    # Clasificar por tipo de informe
+    def clasificar_informe(accion):
+        a = str(accion).lower()
+        if 'informe final de liquidación' in a or 'carta de cobertura (rechazo)' in a:
+            return 'IFL'
+        elif 'informe intermedio' in a:
+            return 'Intermedio'
+        elif 'preliminar' in a:
+            return 'Preliminar'
+        return None
+
+    df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
+    df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
+
+    columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros']
+
+    def agregar_tabla_entregables(doc, df_sub, color_header):
+        table = doc.add_table(rows=1, cols=len(columnas_tabla))
+        table.style = 'Table Grid'
+        hdr_cells = table.rows[0].cells
+        for i, col_name in enumerate(columnas_tabla):
+            hdr_cells[i].text = col_name
+            run = hdr_cells[i].paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(9)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_header))
+            hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        for _, row in df_sub.drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion']).iterrows():
+            num_caso = str(row.get('numero_caso', '')).strip()
+            datos_m = dict_maestro.get(num_caso, {'corredora': 'N/D', 'aseguradora': 'N/D'})
+            row_cells = table.add_row().cells
+
+            # Ajustador destacado en azul oscuro y negrita
+            row_cells[0].text = str(row.get('Ajustador', ''))
+            run_aj = row_cells[0].paragraphs[0].runs[0]
+            run_aj.font.bold = True
+            run_aj.font.color.rgb = RGBColor(0, 51, 102)
+            run_aj.font.size = Pt(9)
+
+            row_cells[1].text = num_caso
+            row_cells[2].text = str(row.get('Nick Name', ''))
+            row_cells[3].text = str(row.get('asegurado', ''))
+            row_cells[4].text = datos_m['corredora']
+            row_cells[5].text = datos_m['aseguradora']
+
+            for j in range(1, len(columnas_tabla)):
+                if row_cells[j].paragraphs[0].runs:
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+
+    secciones = [
+        ('IFL',        '1. Informes Finales de Liquidación y Cartas de Cobertura/Rechazo', '003366'),
+        ('Intermedio', '2. Informes Intermedios',                                           '004A99'),
+        ('Preliminar', '3. Informes Preliminares',                                          '217346'),
+    ]
+
+    hay_datos = False
+    for tipo, titulo_seccion, color in secciones:
+        df_tipo = df_informes[df_informes['tipo_informe'] == tipo]
+        if df_tipo.empty:
+            continue
+
+        hay_datos = True
+        doc.add_heading(titulo_seccion, level=1)
+
+        df_entregados    = df_tipo[df_tipo['estado_cumplimiento'] == 'Realizado']
+        df_no_entregados = df_tipo[df_tipo['estado_cumplimiento'] != 'Realizado']
+
+        doc.add_heading(f'Entregados ({len(df_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
+        if not df_entregados.empty:
+            agregar_tabla_entregables(doc, df_entregados, color)
+        else:
+            doc.add_paragraph('Sin entregables realizados en este período.')
+        doc.add_paragraph('')
+
+        doc.add_heading(f'No Entregados ({len(df_no_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
+        if not df_no_entregados.empty:
+            agregar_tabla_entregables(doc, df_no_entregados, 'D9534F')
+        else:
+            doc.add_paragraph('Todos los entregables de esta categoría fueron realizados.')
+        doc.add_paragraph('')
+
+    if not hay_datos:
+        doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+# ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
 # ---------------------------------------------------------
@@ -2445,6 +2575,24 @@ def vista_reportes():
         renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
     with tab_gantt:
         renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
+
+    # --- REPORTE EXCLUSIVO SEMANA PASADA: ENTREGABLES POR TIPO Y ESTADO ---
+    if week_id_obj == "Semana Pasada":
+        st.markdown("---")
+        st.markdown("### 📄 Reporte de Entregables (Semana Pasada)")
+        st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+        if st.button("📥 Generar Reporte de Entregables (WORD)", type="primary", use_container_width=True):
+            try:
+                word_bytes = generar_reporte_entregables_word(df_week, week_id_obj)
+                st.download_button(
+                    label="⬇️ Descargar Reporte de Entregables",
+                    data=word_bytes,
+                    file_name=f"Reporte_Entregables_{target_week_id}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary"
+                )
+            except Exception as e:
+                st.error(f"Error al generar el reporte: {e}")
 
 
 # ---------------------------------------------------------
