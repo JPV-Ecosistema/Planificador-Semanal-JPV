@@ -2445,7 +2445,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
     df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
     df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
 
-    columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros']
+    columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Honorarios (UF)']
 
     def agregar_tabla_entregables(doc, df_sub, color_header):
         table = doc.add_table(rows=1, cols=len(columnas_tabla))
@@ -2477,6 +2477,12 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
             row_cells[3].text = str(row.get('asegurado', ''))
             row_cells[4].text = datos_m['corredora']
             row_cells[5].text = datos_m['aseguradora']
+
+            try:
+                hon = float(row.get('honorarios_estimados', 0.0))
+                row_cells[6].text = f"{hon:,.2f}"
+            except Exception:
+                row_cells[6].text = "0.00"
 
             for j in range(1, len(columnas_tabla)):
                 if row_cells[j].paragraphs[0].runs:
