@@ -313,7 +313,7 @@ def save_plan_actualizado(filepath, data):
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
-# VERSIÓN: 2.4.3 (Reloj en Tiempo Real y Candado Chile Time)
+# VERSIÓN: 2.4.4 (Candado Inteligente con Extensión por Feriados)
 # ---------------------------------------------------------
 def vista_planificador(modo="Semanal"):
     import pandas as pd
@@ -367,18 +367,24 @@ def vista_planificador(modo="Semanal"):
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
     
-    # --- CANDADO TEMPORAL (VENTANA DE COMPROMISO) ---
+    # --- CANDADO TEMPORAL INTELIGENTE (VENTANA DE COMPROMISO) ---
     es_adicional = False
     if modo == "Semanal":
-        # Usamos la misma zona horaria para los cálculos de fecha objetivo
         target_date = ahora_chile + timedelta(weeks=offset_weeks)
         lunes_target = target_date.date() - timedelta(days=target_date.weekday())
         viernes_prev = lunes_target - timedelta(days=3)
         
-        # El candado es robusto: se basa en la hora local real de Chile
-        if not (viernes_prev <= hoy_dt <= lunes_target):
+        # Lógica de Feriados: Si el lunes es feriado, el cierre se corre al martes
+        dia_cierre_oficial = lunes_target
+        while dia_cierre_oficial in feriados_cl:
+            dia_cierre_oficial += timedelta(days=1)
+            
+        nombre_dia_cierre = "Lunes" if dia_cierre_oficial == lunes_target else "Martes (extendido por feriado)"
+        
+        # El candado evalúa la hora local y respeta la extensión si hubo festivo
+        if not (viernes_prev <= hoy_dt <= dia_cierre_oficial):
             es_adicional = True
-            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a Lunes) ha expirado. Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
+            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a {nombre_dia_cierre}) ha expirado (Hora local: {ahora_chile.strftime('%H:%M:%S')}). Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
 
     tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
 
@@ -691,6 +697,7 @@ def vista_planificador(modo="Semanal"):
                                 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.success(f"Registro exitoso para la {semana_opcion}. Documento respaldado.")
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
