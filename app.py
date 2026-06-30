@@ -1181,7 +1181,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     
     t_planificadas = len(df_week[df_week['tipo_actividad'] == 'Programada'])
     t_planificadas_hechas = len(df_realizados[df_realizados['tipo_actividad'] == 'Programada'])
-    t_urgencias = len(df_realizados[df_realizados['tipo_actividad'] == 'No Programada'])
+    t_urgencias = len(df_realizados[df_realizados['tipo_actividad'] == 'Actividad Adicional'])
     
     if t_planificadas > 0:
         adherencia = (t_planificadas_hechas / t_planificadas) * 100
@@ -1611,7 +1611,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
             t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
             t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
-            t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'])
+            t_np = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Actividad Adicional'])
 
             if t_prog > 0:
                 adh_aj = (t_prog_hechas / t_prog) * 100
@@ -1755,7 +1755,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
                 if t_np > 0:
                     st.markdown("**🔴 Detalle de Tareas No Programadas:**")
-                    df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'No Programada'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
+                    df_np_view = df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Actividad Adicional'][['numero_caso', 'asegurado', 'accion', 'fecha_ejecucion']]
                     st.dataframe(df_np_view, use_container_width=True, hide_index=True)
 
                     op_doc.add_heading('🔴 Tareas No Programadas:', level=2)
