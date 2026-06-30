@@ -1812,7 +1812,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
 # ---------------------------------------------------------
 # BLOQUE 4.5: VISTA - CARTA GANTT OPERATIVA
-# VERSIÓN: 4.5.15 (Aritmética Cuadrada, Etiqueta Celeste y Líneas Íntegras)
+# VERSIÓN: 4.5.16 (Corrección Quirúrgica de NameError df_aj)
 # ---------------------------------------------------------
 def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj):
     import io
@@ -2188,6 +2188,9 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
             for aj in ajustadores_div:
                 doc.add_page_break()
                 doc.add_heading(f"{div} | Ajustador: {aj}", level=2)
+                
+                # ---> CORRECCIÓN QUIRÚRGICA: DEFINIR df_aj AL INICIO DEL CICLO <---
+                df_aj = df_div[df_div['Ajustador'] == aj]
                 
                 # Rescate de los datos ya calculados del diccionario central
                 aj_data = resumen_ajustadores.get(aj, {'IFL': 0.0, 'WIP': 0.0})
