@@ -2652,7 +2652,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
             row_cells[5].text = str(row.get(col_cia, ''))
 
             fecha_mov = row.get('_fecha_mov')
-            row_cells[6].text = fecha_mov.strftime('%d/%m/%Y') if fecha_mov else 'Sin registro'
+            row_cells[6].text = fecha_mov.strftime('%d/%m/%Y') if (fecha_mov is not None and not pd.isnull(fecha_mov)) else 'Sin registro'
             row_cells[7].text = str(row.get('_dias_sin_mov', ''))
             row_cells[8].text = str(row.get(col_cont, ''))[:300]
 
