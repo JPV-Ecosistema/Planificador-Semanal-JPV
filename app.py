@@ -2597,7 +2597,15 @@ def generar_reporte_sin_movimiento_word(df_raw):
     # --- Calcular días sin movimiento desde Base Maestra ---
     def parsear_fecha_mov(val):
         try:
-            return pd.to_datetime(str(val), dayfirst=True, errors='coerce').date()
+            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                return None
+            s = str(val).strip()
+            # Serial de fecha Excel (número entero almacenado como string)
+            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                serial = int(float(s))
+                if 30000 < serial < 60000:  # rango razonable de fechas Excel
+                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+            return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
         except Exception:
             return None
 
