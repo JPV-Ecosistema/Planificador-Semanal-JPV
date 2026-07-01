@@ -2539,6 +2539,149 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
 
 
 # ---------------------------------------------------------
+# BLOQUE 4.7: REPORTE DE CASOS SIN MOVIMIENTO (WORD)
+# VERSIÓN: 1.0.0
+# ---------------------------------------------------------
+def generar_reporte_sin_movimiento_word(df_raw):
+    import io
+    import os
+    import json
+    import pandas as pd
+    from datetime import datetime, timedelta
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
+
+    hoy = datetime.now().date()
+    limite_21 = hoy - timedelta(days=21)
+
+    # --- Carga silenciosa de Base Maestra ---
+    df_bm = pd.DataFrame()
+    filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    if os.path.exists(filepath_bm):
+        try:
+            with open(filepath_bm, 'r', encoding='utf-8') as f:
+                datos_bm = json.load(f)
+                df_bm = pd.DataFrame(datos_bm['data'])
+        except Exception:
+            pass
+
+    if df_bm.empty:
+        return None, "No se encontró la Base Maestra. Suba el archivo antes de generar este reporte."
+
+    # --- Casos con actividad reciente en el histórico de planificaciones ---
+    casos_con_actividad = set()
+    if not df_raw.empty:
+        df_ejecutados = df_raw[df_raw['estado_cumplimiento'] == 'Realizado'].copy()
+        df_ejecutados['fecha_ej'] = pd.to_datetime(df_ejecutados.get('fecha_ejecucion', pd.Series(dtype=str)), errors='coerce').dt.date
+        df_recientes = df_ejecutados[df_ejecutados['fecha_ej'] >= limite_21]
+        casos_con_actividad = set(df_recientes['numero_caso'].astype(str).str.strip().unique())
+
+    # --- Filtrar casos vigentes de la Base Maestra ---
+    col_estado = 'Estado' if 'Estado' in df_bm.columns else df_bm.columns[18]
+    col_caso   = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+    col_ultmov = 'Último movimiento' if 'Último movimiento' in df_bm.columns else df_bm.columns[70]
+    col_cont   = 'Contenido último movimiento' if 'Contenido último movimiento' in df_bm.columns else df_bm.columns[71]
+    col_aj     = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
+    col_nick   = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
+    col_aseg   = 'Asegurado' if 'Asegurado' in df_bm.columns else df_bm.columns[11]
+    col_corr   = 'Corredora' if 'Corredora' in df_bm.columns else df_bm.columns[7]
+    col_cia    = 'Compañía de seguros' if 'Compañía de seguros' in df_bm.columns else df_bm.columns[6]
+
+    df_vigentes = df_bm[df_bm[col_estado].astype(str).str.strip().str.lower() != 'cerrado'].copy()
+
+    # --- Calcular días sin movimiento desde Base Maestra ---
+    def parsear_fecha_mov(val):
+        try:
+            return pd.to_datetime(str(val), dayfirst=True, errors='coerce').date()
+        except Exception:
+            return None
+
+    df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov].apply(parsear_fecha_mov)
+    df_vigentes['_dias_sin_mov'] = df_vigentes['_fecha_mov'].apply(
+        lambda f: (hoy - f).days if f else 9999
+    )
+
+    # --- Filtro: más de 21 días en Base Maestra Y sin actividad en histórico ---
+    df_sin_mov = df_vigentes[
+        (df_vigentes['_dias_sin_mov'] > 21) &
+        (~df_vigentes[col_caso].astype(str).str.strip().isin(casos_con_actividad))
+    ].copy()
+
+    df_sin_mov = df_sin_mov.sort_values(by=[col_aj, '_dias_sin_mov'], ascending=[True, False])
+
+    # --- Clasificar MCL vs < 5000 UF ---
+    df_sin_mov['_es_mcl'] = df_sin_mov.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)
+    df_mcl      = df_sin_mov[df_sin_mov['_es_mcl'] == True]
+    df_menores  = df_sin_mov[df_sin_mov['_es_mcl'] == False]
+
+    # --- Generar Word ---
+    doc = Document()
+    doc.add_heading(f'Reporte de Casos Sin Movimiento (> 21 días)', 0)
+    doc.add_paragraph(f'Generado el: {hoy.strftime("%d/%m/%Y")} | Casos vigentes sin actividad registrada en los últimos 21 días.')
+
+    columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Último Movimiento', 'Días sin actividad', 'Contenido Último Movimiento']
+
+    def agregar_tabla_sin_mov(doc, df_sec, color_header):
+        table = doc.add_table(rows=1, cols=len(columnas_tabla))
+        table.style = 'Table Grid'
+        hdr_cells = table.rows[0].cells
+        for i, col_name in enumerate(columnas_tabla):
+            hdr_cells[i].text = col_name
+            run = hdr_cells[i].paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(8)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_header))
+            hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        for _, row in df_sec.iterrows():
+            row_cells = table.add_row().cells
+
+            row_cells[0].text = str(row.get(col_aj, ''))
+            run_aj = row_cells[0].paragraphs[0].runs[0]
+            run_aj.font.bold = True
+            run_aj.font.color.rgb = RGBColor(0, 51, 102)
+            run_aj.font.size = Pt(8)
+
+            row_cells[1].text = str(row.get(col_caso, ''))
+            row_cells[2].text = str(row.get(col_nick, ''))
+            row_cells[3].text = str(row.get(col_aseg, ''))
+            row_cells[4].text = str(row.get(col_corr, ''))
+            row_cells[5].text = str(row.get(col_cia, ''))
+
+            fecha_mov = row.get('_fecha_mov')
+            row_cells[6].text = fecha_mov.strftime('%d/%m/%Y') if fecha_mov else 'Sin registro'
+            row_cells[7].text = str(row.get('_dias_sin_mov', ''))
+            row_cells[8].text = str(row.get(col_cont, ''))[:300]
+
+            for j in range(1, len(columnas_tabla)):
+                if row_cells[j].paragraphs[0].runs:
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+
+    # Sección 1: MCL
+    doc.add_heading(f'1. Casos MCL sin movimiento ({len(df_mcl)} casos)', level=1)
+    if not df_mcl.empty:
+        agregar_tabla_sin_mov(doc, df_mcl, 'D9534F')
+    else:
+        doc.add_paragraph('No hay casos MCL sin movimiento en este período.')
+    doc.add_paragraph('')
+
+    # Sección 2: < 5000 UF
+    doc.add_page_break()
+    doc.add_heading(f'2. Casos < 5.000 UF sin movimiento ({len(df_menores)} casos)', level=1)
+    if not df_menores.empty:
+        agregar_tabla_sin_mov(doc, df_menores, '004A99')
+    else:
+        doc.add_paragraph('No hay casos < 5.000 UF sin movimiento en este período.')
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue(), None
+
+
+# ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
 # ---------------------------------------------------------
@@ -2579,18 +2722,39 @@ def vista_reportes():
     # 4.2 Llamada al motor de datos
     df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
 
-    tab_dashboard, tab_operacional, tab_gantt = st.tabs([
-        "📈 Dashboard Ejecutivo (BI)", 
-        "📋 Reporte Operacional de Equipo", 
-        "📊 Carta Gantt Operativa"
+    tab_dashboard, tab_operacional, tab_gantt, tab_sin_mov = st.tabs([
+        "📈 Dashboard Ejecutivo (BI)",
+        "📋 Reporte Operacional de Equipo",
+        "📊 Carta Gantt Operativa",
+        "🔴 Casos Sin Movimiento"
     ])
-    
+
     with tab_dashboard:
         renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
     with tab_operacional:
         renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
     with tab_gantt:
         renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
+    with tab_sin_mov:
+        st.markdown("### 🔴 Casos Sin Movimiento (> 21 días)")
+        st.info("Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
+        if st.button("📥 Generar Reporte Casos Sin Movimiento (WORD)", type="primary", use_container_width=True, key="btn_sin_mov"):
+            with st.spinner("Analizando casos..."):
+                try:
+                    word_bytes, error_msg = generar_reporte_sin_movimiento_word(df_raw)
+                    if error_msg:
+                        st.error(error_msg)
+                    else:
+                        st.download_button(
+                            label="⬇️ Descargar Reporte Casos Sin Movimiento",
+                            data=word_bytes,
+                            file_name=f"Casos_Sin_Movimiento_{target_week_id}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary",
+                            key="dl_sin_mov"
+                        )
+                except Exception as e:
+                    st.error(f"Error al generar el reporte: {e}")
 
     # --- REPORTE EXCLUSIVO SEMANA PASADA: ENTREGABLES POR TIPO Y ESTADO ---
     if week_id_obj == "Semana Pasada":
