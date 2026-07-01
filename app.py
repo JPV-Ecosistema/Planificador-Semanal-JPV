@@ -2620,7 +2620,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
         (~df_vigentes[col_caso].astype(str).str.strip().isin(casos_con_actividad))
     ].copy()
 
-    df_sin_mov = df_sin_mov.sort_values(by=[col_aj, '_dias_sin_mov'], ascending=[True, False])
+    df_sin_mov = df_sin_mov.sort_values(by='_dias_sin_mov', ascending=False)
 
     # --- Clasificar MCL vs < 5000 UF ---
     df_sin_mov['_es_mcl'] = df_sin_mov.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)
