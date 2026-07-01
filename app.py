@@ -2600,7 +2600,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
 
     df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov].apply(parsear_fecha_mov)
     df_vigentes['_dias_sin_mov'] = df_vigentes['_fecha_mov'].apply(
-        lambda f: (hoy - f).days if f else 9999
+        lambda f: (hoy - f).days if (f is not None and not pd.isnull(f)) else 9999
     )
 
     # --- Filtro: más de 21 días en Base Maestra Y sin actividad en histórico ---
