@@ -716,10 +716,20 @@ def vista_diario():
     import pandas as pd
     import streamlit as st
     from datetime import datetime
-    
+    import pytz
+
+    tz_chile = pytz.timezone('America/Santiago')
+    ahora_chile_diario = datetime.now(tz_chile)
+
+    DIAS_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+    MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+    nombre_dia = DIAS_ES[ahora_chile_diario.weekday()]
+    nombre_mes = MESES_ES[ahora_chile_diario.month - 1]
+    fecha_es = f"{nombre_dia}, {ahora_chile_diario.day:02d} de {nombre_mes} de {ahora_chile_diario.year}"
+
     st.title("☀️ Ejecución y Cumplimiento")
-    hoy_str = datetime.now().strftime("%Y-%m-%d")
-    st.markdown(f"**Fecha actual:** {datetime.now().strftime('%A, %d de %B de %Y')}")
+    hoy_str = ahora_chile_diario.strftime("%Y-%m-%d")
+    st.markdown(f"**Fecha actual:** {fecha_es}")
     
     week_id = get_week_identifier()
     
