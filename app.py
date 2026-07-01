@@ -2547,13 +2547,16 @@ def generar_reporte_sin_movimiento_word(df_raw):
     import os
     import json
     import pandas as pd
+    import pytz
     from datetime import datetime, timedelta
     from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.oxml.ns import nsdecls
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.oxml.ns import nsdecls, qn
     from docx.oxml import parse_xml
+    from docx.enum.section import WD_ORIENT
 
-    hoy = datetime.now().date()
+    tz_chile = pytz.timezone('America/Santiago')
+    hoy = datetime.now(tz_chile).date()
     limite_21 = hoy - timedelta(days=21)
 
     # --- Carga silenciosa de Base Maestra ---
@@ -2618,10 +2621,22 @@ def generar_reporte_sin_movimiento_word(df_raw):
 
     # --- Generar Word ---
     doc = Document()
+
+    # Orientación horizontal
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    section.left_margin   = Inches(0.6)
+    section.right_margin  = Inches(0.6)
+    section.top_margin    = Inches(0.6)
+    section.bottom_margin = Inches(0.6)
+
     doc.add_heading(f'Reporte de Casos Sin Movimiento (> 21 días)', 0)
     doc.add_paragraph(f'Generado el: {hoy.strftime("%d/%m/%Y")} | Casos vigentes sin actividad registrada en los últimos 21 días.')
 
     columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Último Movimiento', 'Días sin actividad', 'Contenido Último Movimiento']
+    # Anchos en pulgadas (total ~9.7" usable en horizontal con márgenes 0.6")
+    col_widths = [1.2, 0.8, 0.8, 1.2, 1.0, 1.2, 0.9, 0.7, 2.6]
 
     def agregar_tabla_sin_mov(doc, df_sec, color_header):
         table = doc.add_table(rows=1, cols=len(columnas_tabla))
@@ -2629,6 +2644,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
         hdr_cells = table.rows[0].cells
         for i, col_name in enumerate(columnas_tabla):
             hdr_cells[i].text = col_name
+            hdr_cells[i].width = Inches(col_widths[i])
             run = hdr_cells[i].paragraphs[0].runs[0]
             run.font.bold = True
             run.font.color.rgb = RGBColor(255, 255, 255)
@@ -2638,6 +2654,8 @@ def generar_reporte_sin_movimiento_word(df_raw):
 
         for _, row in df_sec.iterrows():
             row_cells = table.add_row().cells
+            for i in range(len(columnas_tabla)):
+                row_cells[i].width = Inches(col_widths[i])
 
             row_cells[0].text = str(row.get(col_aj, ''))
             run_aj = row_cells[0].paragraphs[0].runs[0]
@@ -2653,7 +2671,8 @@ def generar_reporte_sin_movimiento_word(df_raw):
 
             fecha_mov = row.get('_fecha_mov')
             row_cells[6].text = fecha_mov.strftime('%d/%m/%Y') if (fecha_mov is not None and not pd.isnull(fecha_mov)) else 'Sin registro'
-            row_cells[7].text = str(row.get('_dias_sin_mov', ''))
+            dias = row.get('_dias_sin_mov', 9999)
+            row_cells[7].text = 'Sin registro' if dias == 9999 else str(dias)
             row_cells[8].text = str(row.get(col_cont, ''))[:300]
 
             for j in range(1, len(columnas_tabla)):
