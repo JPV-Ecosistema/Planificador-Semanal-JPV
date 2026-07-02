@@ -75,12 +75,10 @@ def get_google_sheet():
     return None
 
 def load_master_base():
-    st.sidebar.header("📁 Base Maestra")
+    """Carga y devuelve el DataFrame de la Base Maestra sin renderizar UI."""
     filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
-    
     df_local = None
-    fecha_actualizacion = None
-    
+
     # 1. Recuperación en silencio desde Google Sheets si no hay base local
     if not os.path.exists(filepath):
         client = get_google_client()
@@ -89,29 +87,42 @@ def load_master_base():
                 doc = client.open_by_url(st.secrets["google_sheet_url"])
                 ws = doc.worksheet("Base_Maestra")
                 metadata = ws.row_values(1)
-                
                 if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
                     fecha_str = metadata[1]
-                    datos_crud = ws.get_all_records(head=2) 
+                    datos_crud = ws.get_all_records(head=2)
                     df_local = pd.DataFrame(datos_crud)
-                    
                     datos_guardar = {"fecha": fecha_str, "data": df_local.to_dict(orient="records")}
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(datos_guardar, f, ensure_ascii=False)
             except Exception:
                 pass
-                
+
     # 2. Lectura de caché local
     if os.path.exists(filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 datos = json.load(f)
                 df_local = pd.DataFrame(datos['data'])
+        except Exception:
+            pass
+
+    return df_local
+
+
+def render_sidebar_base_maestra():
+    """Renderiza el widget de Base Maestra en el sidebar. Llamar UNA SOLA VEZ desde main()."""
+    filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    fecha_actualizacion = None
+
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                datos = json.load(f)
                 fecha_actualizacion = datetime.strptime(datos['fecha'], "%Y-%m-%d %H:%M:%S")
         except Exception:
             pass
 
-    # 3. Lógica de Semáforo y Caducidad (7 Días)
+    st.sidebar.header("📁 Base Maestra")
     necesita_actualizacion = True
     if fecha_actualizacion:
         dias = (datetime.now() - fecha_actualizacion).days
@@ -123,26 +134,19 @@ def load_master_base():
     else:
         st.sidebar.warning("⚠️ No hay base de datos en el sistema.")
 
-    # 4. Motor de Carga, Sanitización y Respaldo Nube
     with st.sidebar.expander("📥 Subir / Actualizar Base Maestra", expanded=necesita_actualizacion):
-        
-        # --- ADVERTENCIA ESTRATÉGICA ANTES DE CARGAR ---
         st.warning("💡 **Requisito del Excel:** El reporte de acciones extraído del sistema debe contemplar a **todas las divisiones de la gerencia**. Antes de subirlo, verifique que no existan filtros que oculten a los ajustadores y asegúrese de **excluir** los casos en estado *Anulado* o *Cerrado*.")
-        
         uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"], key="uploader_base_maestra")
         if uploaded_file is not None:
-            # Creamos una huella digital única para el archivo subido
             file_signature = f"{uploaded_file.name}_{uploaded_file.size}"
-            
-            # El Guardián solo permite procesar si es un archivo nuevo o no ha sido registrado en esta sesión
             if st.session_state.get("ultima_base_procesada") != file_signature:
                 try:
                     if uploaded_file.name.endswith('.xlsx'):
                         df_nuevo = pd.read_excel(uploaded_file, skiprows=5)
                     else:
                         df_nuevo = pd.read_csv(uploaded_file, skiprows=5)
-                    
-                    df_nuevo = df_nuevo.fillna("") 
+
+                    df_nuevo = df_nuevo.fillna("")
                     for col in df_nuevo.columns:
                         df_nuevo[col] = df_nuevo[col].astype(str)
                         df_nuevo[col] = df_nuevo[col].apply(
@@ -150,42 +154,34 @@ def load_master_base():
                         )
 
                     fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # Guardado Local Inmediato (Asegura operatividad interna)
                     datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(datos_guardar, f, ensure_ascii=False)
-                        
-                    # Intento de Sincronización en la Nube corporativa
+
                     try:
                         client = get_google_client()
                         if client:
                             doc = client.open_by_url(st.secrets["google_sheet_url"])
                             try:
                                 ws = doc.worksheet("Base_Maestra")
-                            except:
+                            except Exception:
                                 ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
-                            
                             ws.clear()
                             matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
                             matriz.append(df_nuevo.columns.astype(str).tolist())
                             matriz.extend(df_nuevo.values.tolist())
                             ws.update("A1", matriz)
-
                         st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
                     except Exception as cloud_error:
                         if "429" in str(cloud_error):
                             st.warning("⚠️ Base guardada localmente con éxito. Google Cloud está en pausa (Límite 429 de peticiones). Puedes operar tu planificador normalmente.")
                         else:
                             st.warning(f"⚠️ Base guardada localmente. Hubo un detalle con el respaldo en nube: {cloud_error}")
-                    
-                    # Registramos el archivo como procesado para congelar ejecuciones repetidas
+
                     st.session_state["ultima_base_procesada"] = file_signature
-                    st.rerun() 
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error crítico al procesar el Excel: {e}")
-                
-    return df_local
 
 def limpiar_monto_mcl(valor):
     if pd.isna(valor) or str(valor).strip() in ["", "nan", "NaN", "NaT"]: return 0.0
@@ -3283,12 +3279,14 @@ def vista_reportes():
 def main():
     st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60)
     st.sidebar.title("Navegación OpsControl")
-    
+
     opcion = st.sidebar.radio(
         "Ir a:",
         ["Planificador Semanal", "Planificador Mensual MCL", "Programa Diario", "Reportes Jefatura"]
     )
-    
+
+    st.sidebar.markdown("---")
+    render_sidebar_base_maestra()
     st.sidebar.markdown("---")
     
     if opcion == "Planificador Semanal":
