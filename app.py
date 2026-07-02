@@ -1580,6 +1580,27 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
     st.markdown("### 📋 Radiografía Operacional por Ajustador")
     st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Tareas No Programadas y Gestión.")
 
+    if week_id_obj == "Semana Pasada":
+        st.markdown("---")
+        st.markdown("#### 📥 Presentaciones Individuales para Reunión")
+        st.info("Genera un archivo PPTX por cada ajustador (7 diapositivas) con sus KPIs, casos, tareas no realizadas y casos sin movimiento. Se descarga un ZIP con todos los archivos.")
+        if st.button("🎯 Generar PPTX por Ajustador (ZIP)", type="primary", use_container_width=True, key=f"btn_pptx_{target_week_id}"):
+            with st.spinner("Generando presentaciones... esto puede tomar unos segundos."):
+                try:
+                    zip_bytes = generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj)
+                    st.download_button(
+                        label="⬇️ Descargar ZIP con PPTX por Ajustador",
+                        data=zip_bytes,
+                        file_name=f"Reportes_Ajustadores_{target_week_id}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"dl_pptx_{target_week_id}"
+                    )
+                    st.success(f"✅ {len(ajustadores_validos)} presentaciones generadas correctamente.")
+                except Exception as e:
+                    st.error(f"Error al generar PPTX: {e}")
+        st.markdown("---")
+
     op_doc = Document()
     op_doc.add_heading(f'📋 Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
 
@@ -2706,6 +2727,386 @@ def generar_reporte_sin_movimiento_word(df_raw):
     buffer = io.BytesIO()
     doc.save(buffer)
     return buffer.getvalue(), None
+
+
+# ---------------------------------------------------------
+# BLOQUE 4.8: GENERADOR DE PPTX POR AJUSTADOR
+# ---------------------------------------------------------
+def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj):
+    import io
+    import os
+    import json
+    import zipfile
+    import pytz
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    import pandas as pd
+    from datetime import datetime, timedelta
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+
+    tz_chile = pytz.timezone('America/Santiago')
+    hoy = datetime.now(tz_chile).date()
+
+    # ── Colores ──
+    C_NAVY    = RGBColor(0, 51, 102)
+    C_NAVY2   = RGBColor(0, 74, 153)
+    C_GOLD    = RGBColor(184, 148, 60)
+    C_CORAL   = RGBColor(201, 64, 64)
+    C_AMBER   = RGBColor(122, 72, 0)
+    C_DARKRED = RGBColor(74, 16, 16)
+    C_GREEN   = RGBColor(30, 125, 58)
+    C_WHITE   = RGBColor(255, 255, 255)
+    C_STEEL   = RGBColor(238, 242, 247)
+    C_TEXT    = RGBColor(26, 38, 53)
+    C_MID     = RGBColor(74, 93, 110)
+    C_SUB     = RGBColor(122, 143, 160)
+    C_LTGREEN = RGBColor(227, 245, 233)
+    C_ALTAMB  = RGBColor(253, 248, 240)
+    C_ALTRED  = RGBColor(253, 242, 242)
+
+    # ── Cargar Base Maestra para casos sin movimiento ──
+    df_bm = pd.DataFrame()
+    col_aj_bm = col_caso_bm = col_nick_bm = col_aseg_bm = col_corr_bm = col_ultmov_bm = col_cont_bm = col_estado_bm = None
+    filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    if os.path.exists(filepath_bm):
+        try:
+            with open(filepath_bm, 'r', encoding='utf-8') as f:
+                datos_bm = json.load(f)
+                df_bm = pd.DataFrame(datos_bm['data'])
+        except Exception:
+            pass
+
+    df_sin_mov_global = pd.DataFrame()
+    if not df_bm.empty:
+        col_estado_bm = 'Estado'            if 'Estado'                      in df_bm.columns else df_bm.columns[18]
+        col_caso_bm   = 'Número de caso'    if 'Número de caso'              in df_bm.columns else df_bm.columns[0]
+        col_ultmov_bm = 'Último movimiento' if 'Último movimiento'           in df_bm.columns else df_bm.columns[70]
+        col_cont_bm   = 'Contenido último movimiento' if 'Contenido último movimiento' in df_bm.columns else df_bm.columns[71]
+        col_aj_bm     = 'Ajustador senior'  if 'Ajustador senior'            in df_bm.columns else df_bm.columns[9]
+        col_nick_bm   = 'Nickname'          if 'Nickname'                    in df_bm.columns else df_bm.columns[2]
+        col_aseg_bm   = 'Asegurado'         if 'Asegurado'                   in df_bm.columns else df_bm.columns[11]
+        col_corr_bm   = 'Corredora'         if 'Corredora'                   in df_bm.columns else df_bm.columns[7]
+
+        def _parsear_fecha(val):
+            try:
+                if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                    return None
+                s = str(val).strip()
+                if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                    serial = int(float(s))
+                    if 30000 < serial < 60000:
+                        return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+                return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
+            except Exception:
+                return None
+
+        limite_21 = hoy - timedelta(days=21)
+        df_vigentes = df_bm[df_bm[col_estado_bm].astype(str).str.strip().str.lower() != 'cerrado'].copy()
+        df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov_bm].apply(_parsear_fecha)
+        df_vigentes['_dias_sin_mov'] = df_vigentes['_fecha_mov'].apply(
+            lambda f: (hoy - f).days if (f is not None and not pd.isnull(f)) else 9999
+        )
+        casos_act = set()
+        if not df_week.empty:
+            df_ej = df_week[df_week['estado_cumplimiento'] == 'Realizado'].copy()
+            df_ej['_fej'] = pd.to_datetime(df_ej.get('fecha_ejecucion', pd.Series(dtype=str)), errors='coerce').dt.date
+            casos_act = set(df_ej[df_ej['_fej'] >= limite_21]['numero_caso'].astype(str).str.strip().unique())
+        df_sin_mov_global = df_vigentes[
+            (df_vigentes['_dias_sin_mov'] > 21) &
+            (~df_vigentes[col_caso_bm].astype(str).str.strip().isin(casos_act))
+        ].copy()
+        df_sin_mov_global['_es_mcl'] = df_sin_mov_global.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)
+
+    # ── Helpers de diapositiva ──
+    def new_prs():
+        prs = Presentation()
+        prs.slide_width  = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+        return prs
+
+    def blank(prs):
+        return prs.slides.add_slide(prs.slide_layouts[6])
+
+    def rect(sl, x, y, w, h, fill=None, line=None, line_w=0.5):
+        shp = sl.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
+        if fill:
+            shp.fill.solid(); shp.fill.fore_color.rgb = fill
+        else:
+            shp.fill.background()
+        if line:
+            shp.line.color.rgb = line; shp.line.width = Pt(line_w)
+        else:
+            shp.line.fill.background()
+        return shp
+
+    def txt(sl, text, x, y, w, h, size=11, bold=False, color=None, align=PP_ALIGN.LEFT, italic=False):
+        txb = sl.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+        tf = txb.text_frame; tf.word_wrap = True
+        p = tf.paragraphs[0]; p.alignment = align
+        run = p.add_run(); run.text = str(text)
+        run.font.size = Pt(size); run.font.bold = bold; run.font.italic = italic
+        if color: run.font.color.rgb = color
+        return txb
+
+    def header(sl, title, right, bg):
+        rect(sl, 0, 0, 13.33, 0.58, fill=bg)
+        txt(sl, title, 0.25, 0.1, 9.5, 0.42, size=14, bold=True, color=C_WHITE)
+        txt(sl, right, 9.8, 0.1, 3.3, 0.42, size=9, color=RGBColor(160, 195, 230), align=PP_ALIGN.RIGHT)
+
+    def footer(sl, page, total):
+        rect(sl, 0, 7.2, 13.33, 0.3, fill=C_STEEL)
+        txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 5, 0.24, size=8, color=C_SUB)
+        txt(sl, f'{page} / {total}', 12.0, 7.22, 1.1, 0.24, size=8, color=C_SUB, align=PP_ALIGN.RIGHT)
+
+    def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.1):
+        rect(sl, x, y, w, h, fill=C_STEEL)
+        txt(sl, label,        x+0.1, y+0.07, w-0.2, 0.22, size=7.5, bold=True, color=C_SUB,   align=PP_ALIGN.CENTER)
+        txt(sl, str(val),     x,     y+0.29, w,      0.5,  size=26,  bold=True, color=val_color, align=PP_ALIGN.CENTER)
+        txt(sl, sub_lbl,      x+0.1, y+0.82, w-0.2, 0.2,  size=7.5,            color=C_SUB,   align=PP_ALIGN.CENTER)
+
+    def gauge_img(value, title):
+        valor = min(max(float(value), 0), 100)
+        fig, ax = plt.subplots(figsize=(4.5, 2.8))
+        fig.patch.set_facecolor('#EEF2F7'); ax.set_facecolor('#EEF2F7')
+        ctr, r, wd = (0, 0), 1.0, 0.28
+        for s, e, c in [(90, 180, '#D9534F'), (36, 90, '#F0AD4E'), (0, 36, '#28A745')]:
+            ax.add_patch(patches.Wedge(ctr, r, s, e, width=wd, facecolor=c, edgecolor='none'))
+        ang = 180 - (valor * 1.8)
+        theta = np.linspace(np.radians(180), np.radians(ang), 100)
+        rl = r - wd / 2
+        ax.plot(rl * np.cos(theta), rl * np.sin(theta), color='#1A2635', linewidth=6, solid_capstyle='round')
+        ax.text(0, 0.18, f"{valor:.1f}%", ha='center', va='center', fontsize=22, fontweight='bold', color='#1A2635')
+        ax.text(0, 1.2, title, ha='center', va='center', fontsize=13, color='#003366', fontweight='bold')
+        ax.set_xlim(-1.3, 1.3); ax.set_ylim(-0.1, 1.35); ax.axis('off')
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='#EEF2F7')
+        plt.close(fig); buf.seek(0)
+        return buf
+
+    def tabla(sl, headers, rows, x, y, w, h, hdr_color, alt_color=C_STEEL, col_widths=None):
+        if not rows:
+            return
+        tbl_sh = sl.shapes.add_table(len(rows) + 1, len(headers), Inches(x), Inches(y), Inches(w), Inches(h))
+        tbl = tbl_sh.table
+        if col_widths:
+            for i, cw in enumerate(col_widths):
+                tbl.columns[i].width = Inches(cw)
+        for i, hdr in enumerate(headers):
+            c = tbl.cell(0, i); c.text = hdr
+            c.fill.solid(); c.fill.fore_color.rgb = hdr_color
+            p = c.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+            run = p.runs[0] if p.runs else p.add_run()
+            run.font.bold = True; run.font.color.rgb = C_WHITE; run.font.size = Pt(8)
+        for ri, row_data in enumerate(rows):
+            bg = alt_color if ri % 2 == 1 else C_WHITE
+            for ci, val in enumerate(row_data):
+                c = tbl.cell(ri + 1, ci); c.text = str(val) if val is not None else ''
+                c.fill.solid(); c.fill.fore_color.rgb = bg
+                p = c.text_frame.paragraphs[0]
+                run = p.runs[0] if p.runs else p.add_run()
+                run.font.size = Pt(8); run.font.color.rgb = C_TEXT
+
+    def empty_state(sl, mensaje, submensaje=''):
+        rect(sl, 3.8, 2.4, 5.7, 2.4, fill=C_LTGREEN)
+        txt(sl, '✅', 6.2, 2.6, 1.0, 0.7, size=30, align=PP_ALIGN.CENTER)
+        txt(sl, mensaje, 3.9, 3.35, 5.5, 0.55, size=13, bold=True, color=C_GREEN, align=PP_ALIGN.CENTER)
+        if submensaje:
+            txt(sl, submensaje, 4.0, 3.95, 5.3, 0.45, size=10, color=C_MID, align=PP_ALIGN.CENTER, italic=True)
+
+    # ── Construir ZIP ──
+    zip_buf = io.BytesIO()
+    TOTAL = 7
+
+    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for ajustador in ajustadores_validos:
+            df_aj = df_week[
+                df_week['Ajustador'].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()
+            ].copy()
+            df_aj_real = df_aj[df_aj['estado_cumplimiento'] == 'Realizado'] if not df_aj.empty else pd.DataFrame()
+
+            # Casos sin movimiento de este ajustador
+            df_sm = pd.DataFrame()
+            if not df_sin_mov_global.empty and col_aj_bm:
+                df_sm = df_sin_mov_global[
+                    df_sin_mov_global[col_aj_bm].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()
+                ].copy().sort_values('_dias_sin_mov', ascending=False)
+
+            prs = new_prs()
+            meta = f'{ajustador} · {target_week_id}'
+
+            # ── Slide 1: Portada ──
+            sl = blank(prs)
+            rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY)
+            rect(sl, 8.0, 0, 5.33, 7.5, fill=RGBColor(0, 38, 80))
+            rect(sl, 0, 0, 0.22, 7.5, fill=C_GOLD)
+            txt(sl, 'GERENCIA DE LIQUIDACIÓN  ·  SEMANA PASADA', 0.5, 1.3, 7.3, 0.35, size=9, bold=True, color=C_GOLD)
+            txt(sl, str(ajustador), 0.5, 1.85, 7.2, 1.3, size=36, bold=True, color=C_WHITE)
+            txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
+            txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
+            txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
+
+            # ── Slide 2: Financiero ──
+            sl = blank(prs)
+            header(sl, '💰 Resultado Financiero de la Semana', meta, C_NAVY)
+            footer(sl, 2, TOTAL)
+            cond_fac = df_aj_real['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \\(Rechazo\\)', case=False, na=False) if not df_aj_real.empty else pd.Series(dtype=bool)
+            uf_caja = df_aj_real[cond_fac]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
+            cond_wip = ((df_aj_real['categoria'] == 'Operativa') & (~cond_fac)) if not df_aj_real.empty else pd.Series(dtype=bool)
+            uf_wip   = df_aj_real[cond_wip]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
+            n_ifl    = int(cond_fac.sum()) if not df_aj_real.empty else 0
+            rect(sl, 0.4, 0.82, 6.0, 5.85, fill=C_STEEL)
+            rect(sl, 0.4, 0.82, 6.0, 0.07, fill=C_NAVY2)
+            txt(sl, 'FACTURACIÓN LOGRADA · CAJA', 0.65, 1.05, 5.5, 0.3, size=9, bold=True, color=C_MID)
+            txt(sl, f'{uf_caja:,.2f}', 0.55, 1.55, 5.7, 1.5, size=50, bold=False, color=C_NAVY)
+            txt(sl, 'Unidades de Fomento', 0.65, 2.95, 5.5, 0.3, size=10, color=C_SUB)
+            txt(sl, f'{n_ifl} informe(s) finalizado(s) esta semana', 0.65, 3.45, 5.5, 0.3, size=10, color=C_MID)
+            rect(sl, 6.93, 0.82, 6.0, 5.85, fill=C_STEEL)
+            rect(sl, 6.93, 0.82, 6.0, 0.07, fill=C_GOLD)
+            txt(sl, 'ESFUERZO EN PROCESO · WIP', 7.18, 1.05, 5.5, 0.3, size=9, bold=True, color=C_MID)
+            txt(sl, f'{uf_wip:,.2f}', 7.08, 1.55, 5.7, 1.5, size=50, bold=False, color=C_GOLD)
+            txt(sl, 'Unidades de Fomento', 7.18, 2.95, 5.5, 0.3, size=10, color=C_SUB)
+
+            # ── Slide 3: Cumplimiento ──
+            sl = blank(prs)
+            header(sl, '📊 Cumplimiento Operacional', meta, C_NAVY)
+            footer(sl, 3, TOTAL)
+            t_prog        = len(df_aj[df_aj['tipo_actividad'] == 'Programada']) if not df_aj.empty else 0
+            t_prog_hechas = len(df_aj_real[df_aj_real['tipo_actividad'] == 'Programada']) if not df_aj_real.empty else 0
+            t_no_real     = t_prog - t_prog_hechas
+            t_np          = len(df_aj_real[df_aj_real['tipo_actividad'] == 'Actividad Adicional']) if not df_aj_real.empty else 0
+            adh   = (t_prog_hechas / t_prog * 100) if t_prog > 0 else 0
+            total_hechas = t_prog_hechas + t_np
+            rat_pro = (t_prog_hechas / total_hechas * 100) if total_hechas > 0 else 0
+            pill(sl, 'TAREAS PROG.',   t_prog,        'planificadas',    0.4,  0.73, val_color=C_NAVY)
+            pill(sl, 'REALIZADAS',     t_prog_hechas, 'ejecutadas',      3.55, 0.73, val_color=C_GREEN)
+            pill(sl, 'NO REALIZADAS',  t_no_real,     'pendientes',      6.7,  0.73, val_color=C_CORAL)
+            pill(sl, 'ADICIONALES',    t_np,          'no programadas',  9.85, 0.73, val_color=C_NAVY)
+            try:
+                sl.shapes.add_picture(gauge_img(adh,     'Adherencia al Plan'), Inches(0.7),  Inches(2.0), Inches(5.7), Inches(5.0))
+                sl.shapes.add_picture(gauge_img(rat_pro, 'Ratio Proactivo'),    Inches(7.0),  Inches(2.0), Inches(5.7), Inches(5.0))
+            except Exception:
+                txt(sl, f'Adherencia: {adh:.1f}%',    0.7, 3.5, 5.7, 0.5, size=20, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+                txt(sl, f'Ratio Proactivo: {rat_pro:.1f}%', 7.0, 3.5, 5.7, 0.5, size=20, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+
+            # ── Slide 4: Casos realizados ──
+            sl = blank(prs)
+            header(sl, '✅ Trabajo Programado Realizado', meta, C_NAVY)
+            footer(sl, 4, TOTAL)
+            hdrs4 = ['N° Caso', 'Asegurado', 'Acción Realizada', 'Tipo', 'Hon. (UF)']
+            rows4 = []
+            if not df_aj_real.empty:
+                for _, row in df_aj_real[df_aj_real['tipo_actividad'] == 'Programada'].iterrows():
+                    accion = str(row.get('accion', ''))
+                    tipo = 'IFL' if 'Informe Final' in accion or 'Rechazo' in accion else ('Interm.' if any(k in accion for k in ['Intermedio', 'Inspección', 'Visita', 'Coordinación', 'Revisión', 'Análisis']) else 'Prelim.')
+                    try:
+                        hon = f"{float(row.get('honorarios_estimados', 0)):,.2f}"
+                    except Exception:
+                        hon = '—'
+                    rows4.append([str(row.get('numero_caso', '')), str(row.get('asegurado', ''))[:35], accion[:55], tipo, hon])
+            if rows4:
+                rh = min(5.85 / (len(rows4) + 1), 0.4)
+                tabla(sl, hdrs4, rows4, 0.3, 0.75, 12.7, rh * (len(rows4) + 1),
+                      hdr_color=RGBColor(40, 167, 69), alt_color=C_STEEL,
+                      col_widths=[1.5, 3.0, 5.4, 1.1, 1.2])
+            else:
+                empty_state(sl, 'Sin tareas programadas realizadas', 'No se registró trabajo programado en este período.')
+
+            # ── Slide 5: No realizadas ──
+            sl = blank(prs)
+            header(sl, '⚠️ Tareas Programadas No Realizadas', meta, C_AMBER)
+            footer(sl, 5, TOTAL)
+            txt(sl, 'Tareas comprometidas en el plan semanal que no fueron ejecutadas. Quedan pendientes para la próxima semana.',
+                0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
+            hdrs5 = ['N° Caso', 'Asegurado', 'Acción Planificada', 'Fecha Comprometida']
+            rows5 = []
+            if not df_aj.empty:
+                df_no_real_df = df_aj[(df_aj['tipo_actividad'] == 'Programada') & (df_aj['estado_cumplimiento'] != 'Realizado')]
+                for _, row in df_no_real_df.iterrows():
+                    fecha_str = ''
+                    try:
+                        fv = row.get('fecha_programada', row.get('fecha_ejecucion', ''))
+                        if fv and str(fv).strip() not in ('', 'nan', 'NaT', 'None'):
+                            fecha_str = pd.to_datetime(str(fv), errors='coerce').strftime('%d/%m/%Y')
+                    except Exception:
+                        pass
+                    rows5.append([str(row.get('numero_caso', '')), str(row.get('asegurado', ''))[:35], str(row.get('accion', ''))[:55], fecha_str])
+            if rows5:
+                rh = min(5.4 / (len(rows5) + 1), 0.4)
+                tabla(sl, hdrs5, rows5, 0.3, 1.22, 12.7, rh * (len(rows5) + 1),
+                      hdr_color=C_AMBER, alt_color=C_ALTAMB,
+                      col_widths=[1.5, 3.0, 6.5, 1.7])
+            else:
+                empty_state(sl, 'Todas las tareas programadas fueron realizadas')
+
+            # ── Slide 6: Adicionales ──
+            sl = blank(prs)
+            header(sl, '🔴 Actividades Adicionales No Programadas', meta, C_CORAL)
+            footer(sl, 6, TOTAL)
+            txt(sl, 'Actividades que emergieron durante la semana y no estaban en el plan original.',
+                0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
+            hdrs6 = ['N° Caso', 'Asegurado', 'Acción Realizada', 'Fecha Ejecución']
+            rows6 = []
+            if not df_aj_real.empty:
+                for _, row in df_aj_real[df_aj_real['tipo_actividad'] == 'Actividad Adicional'].iterrows():
+                    fecha_str = ''
+                    try:
+                        fv = row.get('fecha_ejecucion', '')
+                        if fv and str(fv).strip() not in ('', 'nan', 'NaT', 'None'):
+                            fecha_str = pd.to_datetime(str(fv), errors='coerce').strftime('%d/%m/%Y')
+                    except Exception:
+                        pass
+                    rows6.append([str(row.get('numero_caso', '')), str(row.get('asegurado', ''))[:35], str(row.get('accion', ''))[:55], fecha_str])
+            if rows6:
+                rh = min(5.4 / (len(rows6) + 1), 0.4)
+                tabla(sl, hdrs6, rows6, 0.3, 1.22, 12.7, rh * (len(rows6) + 1),
+                      hdr_color=C_CORAL, alt_color=C_ALTRED,
+                      col_widths=[1.5, 3.0, 6.5, 1.7])
+            else:
+                empty_state(sl, 'Sin actividades adicionales en este período')
+
+            # ── Slide 7: Sin movimiento ──
+            sl = blank(prs)
+            header(sl, '🔴 Casos Sin Movimiento · Más de 21 Días', meta, C_DARKRED)
+            footer(sl, 7, TOTAL)
+            if not df_sm.empty:
+                hdrs7 = ['N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Tipo', 'Último Movimiento', 'Días', 'Contenido Último Movimiento']
+                rows7 = []
+                for _, row in df_sm.iterrows():
+                    fm = row.get('_fecha_mov')
+                    fecha_str = fm.strftime('%d/%m/%Y') if (fm is not None and not pd.isnull(fm)) else 'Sin registro'
+                    dias = row.get('_dias_sin_mov', 9999)
+                    dias_str = 'Sin registro' if dias == 9999 else str(dias)
+                    rows7.append([
+                        str(row.get(col_caso_bm, '')),
+                        str(row.get(col_nick_bm, ''))[:18],
+                        str(row.get(col_aseg_bm, ''))[:28],
+                        str(row.get(col_corr_bm, ''))[:22],
+                        'MCL' if row.get('_es_mcl') else '<5000 UF',
+                        fecha_str, dias_str,
+                        str(row.get(col_cont_bm, ''))[:55]
+                    ])
+                rh = min(5.85 / (len(rows7) + 1), 0.38)
+                tabla(sl, hdrs7, rows7, 0.3, 0.72, 12.7, rh * (len(rows7) + 1),
+                      hdr_color=C_DARKRED, alt_color=C_ALTRED,
+                      col_widths=[1.3, 1.2, 2.2, 1.8, 0.9, 1.2, 0.55, 3.25])
+            else:
+                empty_state(sl, 'Sin casos con más de 21 días sin movimiento',
+                            'Todos los casos registran actividad reciente en el período.')
+
+            # ── Guardar en ZIP ──
+            pptx_buf = io.BytesIO()
+            prs.save(pptx_buf)
+            safe = str(ajustador).replace(' ', '_').replace('/', '-').replace(',', '')
+            zf.writestr(f'{safe}_{target_week_id}.pptx', pptx_buf.getvalue())
+
+    zip_buf.seek(0)
+    return zip_buf.getvalue()
 
 
 # ---------------------------------------------------------

@@ -8,3 +8,4 @@ plotly
 matplotlib
 holidays
 pytz
+python-pptx
