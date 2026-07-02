@@ -1066,6 +1066,22 @@ def crear_velocimetro(valor, titulo, inverso=False):
     fig.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
     return fig
 
+def agregar_logo_word(doc, ancho_cm=3.5):
+    """Inserta el logo JPV en el encabezado de todas las secciones del documento Word."""
+    import os
+    from docx.shared import Cm
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'imagen.png')
+    if not os.path.exists(logo_path):
+        return
+    for section in doc.sections:
+        header = section.header
+        p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        p.clear()
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        run = p.add_run()
+        run.add_picture(logo_path, width=Cm(ancho_cm))
+
 def formatear_cabecera_tabla(table, bg_color="003366"):
     from docx.shared import RGBColor
     from docx.oxml.ns import nsdecls
@@ -1363,6 +1379,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
 
     # --- DOCUMENTO WORD - DISEÑO TIPO DASHBOARD ---
     dash_doc = Document()
+    agregar_logo_word(dash_doc)
     dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
     
     # 1. Tabla Financiera VIP (Se mantiene grande en la portada)
@@ -1626,6 +1643,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
         st.markdown("---")
 
     op_doc = Document()
+    agregar_logo_word(op_doc)
     op_doc.add_heading(f'📋 Reporte Operacional Detallado por Ajustador - {week_id_obj}', 0)
 
     if not ajustadores_validos:
@@ -2068,6 +2086,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         
         # --- EXPORTACIÓN WORD GANTT (PORTADA CON GRÁFICOS MATPLOTLIB) ---
         doc = Document()
+        agregar_logo_word(doc, ancho_cm=3.0)
         section = doc.sections[-1]
         
         new_width = section.page_height
@@ -2480,6 +2499,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
             pass
 
     doc = Document()
+    agregar_logo_word(doc)
     doc.add_heading(f'Reporte de Entregables - {week_id_obj}', 0)
 
     # Filtrar solo tareas operativas con acción definida
@@ -2674,6 +2694,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
 
     # --- Generar Word ---
     doc = Document()
+    agregar_logo_word(doc, ancho_cm=3.0)
 
     # Orientación horizontal
     section = doc.sections[0]
@@ -2890,6 +2911,13 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 5, 0.24, size=8, color=C_SUB)
         txt(sl, f'{page} / {total}', 12.0, 7.22, 1.1, 0.24, size=8, color=C_SUB, align=PP_ALIGN.RIGHT)
 
+    LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'imagen.png')
+
+    def logo_slide(sl, x=11.5, y=0.08, w=1.65):
+        """Inserta el logo JPV en la posición indicada (pulgadas)."""
+        if os.path.exists(LOGO_PATH):
+            sl.shapes.add_picture(LOGO_PATH, Inches(x), Inches(y), width=Inches(w))
+
     def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.1):
         rect(sl, x, y, w, h, fill=C_STEEL)
         txt(sl, label,    x+0.1, y+0.07, w-0.2, 0.22, size=7.5, bold=True, color=C_SUB,    align=PP_ALIGN.CENTER)
@@ -3000,11 +3028,14 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
             txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
             txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
+            # Logo portada: fondo blanco + logo centrado en panel derecho
+            rect(sl, 8.8, 5.6, 3.7, 1.35, fill=C_WHITE)
+            logo_slide(sl, x=9.05, y=5.72, w=3.2)
 
             # ── Slide 2: Financiero ──
             # FIX 2: tablas detalle en cada panel para eliminar espacio en blanco
             sl = blank(prs)
-            header(sl, '💰 Resultado Financiero de la Semana', meta, C_NAVY)
+            header(sl, '💰 Resultado Financiero de la Semana', meta, C_NAVY); logo_slide(sl)
             footer(sl, 2, TOTAL)
             cond_fac = df_aj_real['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \\(Rechazo\\)', case=False, na=False) if not df_aj_real.empty else pd.Series(dtype=bool)
             uf_caja  = df_aj_real[cond_fac]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
@@ -3052,7 +3083,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
 
             # ── Slide 3: Cumplimiento ──
             sl = blank(prs)
-            header(sl, '📊 Cumplimiento Operacional', meta, C_NAVY)
+            header(sl, '📊 Cumplimiento Operacional', meta, C_NAVY); logo_slide(sl)
             footer(sl, 3, TOTAL)
             t_prog        = len(df_aj[df_aj['tipo_actividad'] == 'Programada']) if not df_aj.empty else 0
             t_prog_hechas = len(df_aj_real[df_aj_real['tipo_actividad'] == 'Programada']) if not df_aj_real.empty else 0
@@ -3077,7 +3108,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # FIX 4: agregar Nickname y Hon. (UF)
             # FIX 5: si t_prog==0 → sin plan registrado
             sl = blank(prs)
-            header(sl, '✅ Trabajo Programado Realizado', meta, C_NAVY)
+            header(sl, '✅ Trabajo Programado Realizado', meta, C_NAVY); logo_slide(sl)
             footer(sl, 4, TOTAL)
             hdrs4 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Realizada', 'Tipo', 'Hon. (UF)']
             rows4 = []
@@ -3101,7 +3132,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # FIX 4: agregar Nickname y Hon. (UF)
             # FIX 5: si t_prog==0 → sin plan registrado
             sl = blank(prs)
-            header(sl, '⚠️ Tareas Programadas No Realizadas', meta, C_AMBER)
+            header(sl, '⚠️ Tareas Programadas No Realizadas', meta, C_AMBER); logo_slide(sl)
             footer(sl, 5, TOTAL)
             txt(sl, 'Tareas comprometidas en el plan semanal que no fueron ejecutadas. Quedan pendientes para la próxima semana.',
                 0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
@@ -3132,7 +3163,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # ── Slide 6: Adicionales ──
             # FIX 4: agregar Nickname y Hon. (UF)
             sl = blank(prs)
-            header(sl, '🔴 Actividades Adicionales No Programadas', meta, C_CORAL)
+            header(sl, '🔴 Actividades Adicionales No Programadas', meta, C_CORAL); logo_slide(sl)
             footer(sl, 6, TOTAL)
             txt(sl, 'Actividades que emergieron durante la semana y no estaban en el plan original.',
                 0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
@@ -3159,7 +3190,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
 
             # ── Slide 7: Sin movimiento (sin cambios) ──
             sl = blank(prs)
-            header(sl, '🔴 Casos Sin Movimiento · Más de 21 Días', meta, C_DARKRED)
+            header(sl, '🔴 Casos Sin Movimiento · Más de 21 Días', meta, C_DARKRED); logo_slide(sl)
             footer(sl, 7, TOTAL)
             if not df_sm.empty:
                 hdrs7 = ['N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Tipo', 'Último Movimiento', 'Días', 'Contenido Último Movimiento']
