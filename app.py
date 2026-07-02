@@ -2843,32 +2843,32 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         if color: run.font.color.rgb = color
         return txb
 
-    def header(sl, title, right, bg):
-        rect(sl, 0, 0, 13.33, 0.58, fill=bg)
-        txt(sl, title, 0.25, 0.1, 9.5, 0.42, size=14, bold=True, color=C_WHITE)
-        txt(sl, right, 9.8, 0.1, 3.3, 0.42, size=9, color=RGBColor(160, 195, 230), align=PP_ALIGN.RIGHT)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    LOGO1_PATH = os.path.join(BASE_DIR, 'Logo JPV1.png')  # portada (tipografía blanca → fondo oscuro)
+    LOGO2_PATH = os.path.join(BASE_DIR, 'Logo JPV2.png')  # slides internas (fondo blanco)
 
-    def footer(sl, page, total):
+    # Logo JPV2: 862x176px, ratio≈4.9:1 → a w=2.1" la altura es ≈0.43", cabe en header de 0.58"
+    _LOGO2_W = 2.1
+    _LOGO2_X = 13.33 - _LOGO2_W - 0.08  # pegado al borde derecho
+
+    def header(sl, title, bg):
+        """Header sin texto derecho — el logo JPV2 ocupa esa esquina con fondo blanco."""
+        rect(sl, 0, 0, 13.33, 0.58, fill=bg)
+        txt(sl, title, 0.25, 0.1, 10.8, 0.42, size=14, bold=True, color=C_WHITE)
+        # Fondo blanco + logo en esquina superior derecha dentro del header
+        if os.path.exists(LOGO2_PATH):
+            rect(sl, _LOGO2_X - 0.07, 0.05, _LOGO2_W + 0.14, 0.48, fill=C_WHITE)
+            sl.shapes.add_picture(LOGO2_PATH, Inches(_LOGO2_X), Inches(0.10), width=Inches(_LOGO2_W))
+
+    def footer(sl, page, total, meta=''):
         rect(sl, 0, 7.2, 13.33, 0.3, fill=C_STEEL)
-        txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 5, 0.24, size=8, color=C_SUB)
+        txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 4, 0.24, size=8, color=C_SUB)
+        if meta:
+            txt(sl, meta, 4.3, 7.22, 7.5, 0.24, size=8, color=C_SUB, align=PP_ALIGN.CENTER)
         txt(sl, f'{page} / {total}', 12.0, 7.22, 1.1, 0.24, size=8, color=C_SUB, align=PP_ALIGN.RIGHT)
 
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    LOGO1_PATH = os.path.join(BASE_DIR, 'Logo JPV1.png')  # portada
-    LOGO2_PATH = os.path.join(BASE_DIR, 'Logo JPV2.png')  # slides internas
-
     def logo_slide(sl):
-        """Inserta logo JPV2 en esquina superior derecha, DEBAJO del header, con fondo blanco."""
-        if not os.path.exists(LOGO2_PATH):
-            return
-        # Fondo blanco debajo del header (header termina en y=0.58)
-        # Logo JPV2: 862x176px ratio≈4.9:1 → w=1.9" → h≈0.39"
-        lw = 1.9
-        lx = 13.33 - lw - 0.12   # margen derecho 0.12"
-        ly = 0.62                  # justo debajo del header
-        lh = 0.44
-        rect(sl, lx - 0.06, ly - 0.03, lw + 0.12, lh, fill=C_WHITE)
-        sl.shapes.add_picture(LOGO2_PATH, Inches(lx), Inches(ly), width=Inches(lw))
+        pass  # ahora el logo va integrado en header()
 
     def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.1):
         rect(sl, x, y, w, h, fill=C_STEEL)
@@ -2980,17 +2980,16 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
             txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
             txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
-            # Logo portada: esquina inferior izquierda sobre fondo oscuro navy
-            # JPV1: 1351x208px, ratio 6.5:1 → w=3.8" → h≈0.58"
+            # Logo portada: esquina inferior izquierda — tipografía blanca visible sobre fondo navy
+            # JPV1: 1351x208px, ratio 6.5:1 → w=3.8" → h≈0.58" — sin fondo blanco
             if os.path.exists(LOGO1_PATH):
-                rect(sl, 0.3, 5.9, 4.1, 0.85, fill=C_WHITE)
                 sl.shapes.add_picture(LOGO1_PATH, Inches(0.42), Inches(6.0), width=Inches(3.8))
 
             # ── Slide 2: Financiero ──
             # FIX 2: tablas detalle en cada panel para eliminar espacio en blanco
             sl = blank(prs)
-            header(sl, '💰 Resultado Financiero de la Semana', meta, C_NAVY); logo_slide(sl)
-            footer(sl, 2, TOTAL)
+            header(sl, '💰 Resultado Financiero de la Semana', C_NAVY)
+            footer(sl, 2, TOTAL, meta)
             cond_fac = df_aj_real['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \\(Rechazo\\)', case=False, na=False) if not df_aj_real.empty else pd.Series(dtype=bool)
             uf_caja  = df_aj_real[cond_fac]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
             cond_wip = ((df_aj_real['categoria'] == 'Operativa') & (~cond_fac)) if not df_aj_real.empty else pd.Series(dtype=bool)
@@ -3037,8 +3036,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
 
             # ── Slide 3: Cumplimiento ──
             sl = blank(prs)
-            header(sl, '📊 Cumplimiento Operacional', meta, C_NAVY); logo_slide(sl)
-            footer(sl, 3, TOTAL)
+            header(sl, '📊 Cumplimiento Operacional', C_NAVY)
+            footer(sl, 3, TOTAL, meta)
             t_prog        = len(df_aj[df_aj['tipo_actividad'] == 'Programada']) if not df_aj.empty else 0
             t_prog_hechas = len(df_aj_real[df_aj_real['tipo_actividad'] == 'Programada']) if not df_aj_real.empty else 0
             t_no_real     = t_prog - t_prog_hechas
@@ -3062,8 +3061,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # FIX 4: agregar Nickname y Hon. (UF)
             # FIX 5: si t_prog==0 → sin plan registrado
             sl = blank(prs)
-            header(sl, '✅ Trabajo Programado Realizado', meta, C_NAVY); logo_slide(sl)
-            footer(sl, 4, TOTAL)
+            header(sl, '✅ Trabajo Programado Realizado', C_NAVY)
+            footer(sl, 4, TOTAL, meta)
             hdrs4 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Realizada', 'Tipo', 'Hon. (UF)']
             rows4 = []
             if not df_aj_real.empty:
@@ -3086,8 +3085,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # FIX 4: agregar Nickname y Hon. (UF)
             # FIX 5: si t_prog==0 → sin plan registrado
             sl = blank(prs)
-            header(sl, '⚠️ Tareas Programadas No Realizadas', meta, C_AMBER); logo_slide(sl)
-            footer(sl, 5, TOTAL)
+            header(sl, '⚠️ Tareas Programadas No Realizadas', C_AMBER)
+            footer(sl, 5, TOTAL, meta)
             txt(sl, 'Tareas comprometidas en el plan semanal que no fueron ejecutadas. Quedan pendientes para la próxima semana.',
                 0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
             hdrs5 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Planificada', 'Fecha Comprometida', 'Hon. (UF)']
@@ -3117,8 +3116,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # ── Slide 6: Adicionales ──
             # FIX 4: agregar Nickname y Hon. (UF)
             sl = blank(prs)
-            header(sl, '🔴 Actividades Adicionales No Programadas', meta, C_CORAL); logo_slide(sl)
-            footer(sl, 6, TOTAL)
+            header(sl, '🔴 Actividades Adicionales No Programadas', C_CORAL)
+            footer(sl, 6, TOTAL, meta)
             txt(sl, 'Actividades que emergieron durante la semana y no estaban en el plan original.',
                 0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
             hdrs6 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Realizada', 'Fecha Ejecución', 'Hon. (UF)']
@@ -3144,8 +3143,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
 
             # ── Slide 7: Sin movimiento (sin cambios) ──
             sl = blank(prs)
-            header(sl, '🔴 Casos Sin Movimiento · Más de 21 Días', meta, C_DARKRED); logo_slide(sl)
-            footer(sl, 7, TOTAL)
+            header(sl, '🔴 Casos Sin Movimiento · Más de 21 Días', C_DARKRED)
+            footer(sl, 7, TOTAL, meta)
             if not df_sm.empty:
                 hdrs7 = ['N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Tipo', 'Último Movimiento', 'Días', 'Contenido Último Movimiento']
                 rows7 = []
