@@ -129,7 +129,7 @@ def load_master_base():
         # --- ADVERTENCIA ESTRATÉGICA ANTES DE CARGAR ---
         st.warning("💡 **Requisito del Excel:** El reporte de acciones extraído del sistema debe contemplar a **todas las divisiones de la gerencia**. Antes de subirlo, verifique que no existan filtros que oculten a los ajustadores y asegúrese de **excluir** los casos en estado *Anulado* o *Cerrado*.")
         
-        uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"])
+        uploaded_file = st.file_uploader("Cargar 'Reporte de Acciones'", type=["xlsx", "csv"], key="uploader_base_maestra")
         if uploaded_file is not None:
             # Creamos una huella digital única para el archivo subido
             file_signature = f"{uploaded_file.name}_{uploaded_file.size}"
@@ -2412,61 +2412,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.1 (Inclusión de Histórico Retroactivo - Semana Pasada)
 # ---------------------------------------------------------
-def vista_reportes():
-    import streamlit as st
-    from datetime import datetime, timedelta
-    
-    st.title("📊 Tablero de Control y Planificación")
-    st.markdown("Visión gerencial del rendimiento financiero, cumplimiento operativo y línea de tiempo de la división.")
-    
-    col_radio, col_btn = st.columns([2, 1])
-    with col_radio:
-        week_id_obj = st.radio(
-            "Seleccione la semana a reportar:", 
-            ["Semana Pasada", "Semana Actual", "Próxima Semana"], 
-            index=1,
-            horizontal=True
-        )
-    with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
-
-    # Lógica de asignación de desplazamiento para cálculo de fechas
-    if week_id_obj == "Semana Pasada":
-        offset = -1
-    elif week_id_obj == "Semana Actual":
-        offset = 0
-    else:
-        offset = 1
-        
-    hoy = datetime.now()
-    target_date = hoy + timedelta(weeks=offset)
-    lunes = target_date - timedelta(days=target_date.weekday())
-    dias_semana_target = []
-    for i in range(7):
-        dia_calculado = (lunes + timedelta(days=i)).date()
-        dias_semana_target.append(dia_calculado)
-        
-    target_week_id = get_week_identifier(offset)
-
-    # 4.2 Llamada al motor de datos
-    df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
-
-    # Pestañas de Navegación Gerencial
-    tab_dashboard, tab_operacional, tab_gantt = st.tabs([
-        "📈 Dashboard Ejecutivo (BI)", 
-        "📋 Reporte Operacional de Equipo", 
-        "📊 Carta Gantt Operativa"
-    ])
-    
-    with tab_dashboard:
-        renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
-        
-    with tab_operacional:
-        renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
-        
-    with tab_gantt:
-        renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)# ---------------------------------------------------------
+# ---------------------------------------------------------
 # BLOQUE 4.6: REPORTE DE ENTREGABLES SEMANA PASADA (WORD)
 # VERSIÓN: 1.0.0
 # ---------------------------------------------------------
