@@ -993,6 +993,30 @@ def vista_diario():
             st.progress(progreso)
             st.caption(f"Avance de cumplimiento global: {tareas_completadas} de {total_tareas} tareas realizadas ({progreso}%).")
 
+            # ── Botón PPTX individual (solo semana pasada) ──
+            prev_week_id = get_week_identifier(offset_weeks=-1)
+            lunes_prev = (ahora_chile_diario - timedelta(weeks=1) - timedelta(days=ahora_chile_diario.weekday())).date()
+            dias_prev = [lunes_prev + timedelta(days=i) for i in range(5)]
+            st.markdown("---")
+            st.markdown("#### 📊 Mi Presentación de Resultados")
+            st.info(f"Genera tu presentación PPTX con tus KPIs de la semana pasada ({prev_week_id}) para la reunión de equipo.")
+            if st.button("🎯 Generar Mi PPTX", type="primary", use_container_width=True, key=f"btn_mi_pptx_{prev_week_id}"):
+                with st.spinner("Generando tu presentación..."):
+                    try:
+                        df_week_prev, _, _ = sincronizar_y_cargar_datos(False, dias_prev)
+                        pptx_bytes = generar_pptx_individual(ajustador_input, df_week_prev, prev_week_id, "Semana Pasada")
+                        safe_name = ajustador_input.replace(' ', '_').replace('/', '-').replace(',', '')
+                        st.download_button(
+                            label="⬇️ Descargar mi PPTX",
+                            data=pptx_bytes,
+                            file_name=f"{safe_name}_{prev_week_id}.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"dl_mi_pptx_{prev_week_id}"
+                        )
+                        st.success("¡Presentación lista! Haz clic en el botón de descarga.")
+                    except Exception as e:
+                        st.error(f"Error al generar PPTX: {e}")
+
 
 # =========================================================
 # MÓDULO 4: REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
@@ -3171,6 +3195,15 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
 
     zip_buf.seek(0)
     return zip_buf.getvalue()
+
+
+def generar_pptx_individual(ajustador, df_week, target_week_id, week_id_obj):
+    """Genera el PPTX de un solo ajustador y devuelve los bytes del archivo."""
+    import io
+    import zipfile
+    zip_bytes = generar_zip_pptx_equipo(df_week, [ajustador], target_week_id, week_id_obj)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        return zf.read(zf.namelist()[0])
 
 
 # ---------------------------------------------------------
