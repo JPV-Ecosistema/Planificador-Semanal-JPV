@@ -2857,16 +2857,18 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
     LOGO1_PATH = os.path.join(BASE_DIR, 'Logo JPV1.png')  # portada
     LOGO2_PATH = os.path.join(BASE_DIR, 'Logo JPV2.png')  # slides internas
 
-    def logo_slide(sl, x=None, y=None, w=None, logo=None):
-        """Inserta el logo JPV2 alineado a la derecha dentro de la barra de encabezado (0.58")."""
-        path = logo or LOGO2_PATH
-        if not os.path.exists(path):
+    def logo_slide(sl):
+        """Inserta logo JPV2 en esquina superior derecha, DEBAJO del header, con fondo blanco."""
+        if not os.path.exists(LOGO2_PATH):
             return
-        # Logo JPV2: 862x176px, ratio ~4.9:1. A w=1.8" → h≈0.37" cabe dentro de barra 0.58"
-        _w = w or 1.8
-        _x = x if x is not None else (13.33 - _w - 0.15)
-        _y = y if y is not None else 0.10
-        sl.shapes.add_picture(path, Inches(_x), Inches(_y), width=Inches(_w))
+        # Fondo blanco debajo del header (header termina en y=0.58)
+        # Logo JPV2: 862x176px ratio≈4.9:1 → w=1.9" → h≈0.39"
+        lw = 1.9
+        lx = 13.33 - lw - 0.12   # margen derecho 0.12"
+        ly = 0.62                  # justo debajo del header
+        lh = 0.44
+        rect(sl, lx - 0.06, ly - 0.03, lw + 0.12, lh, fill=C_WHITE)
+        sl.shapes.add_picture(LOGO2_PATH, Inches(lx), Inches(ly), width=Inches(lw))
 
     def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.1):
         rect(sl, x, y, w, h, fill=C_STEEL)
@@ -2978,11 +2980,11 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
             txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
             txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
-            # Logo portada: fondo blanco en panel derecho inferior, logo JPV1 sin pisar el nombre
-            rect(sl, 8.4, 6.0, 4.7, 1.2, fill=C_WHITE)
+            # Logo portada: esquina inferior izquierda sobre fondo oscuro navy
+            # JPV1: 1351x208px, ratio 6.5:1 → w=3.8" → h≈0.58"
             if os.path.exists(LOGO1_PATH):
-                # JPV1: 1351x208px, ratio 6.5:1. A w=4.3" → h≈0.66" cabe en el recuadro
-                sl.shapes.add_picture(LOGO1_PATH, Inches(8.65), Inches(6.1), width=Inches(4.3))
+                rect(sl, 0.3, 5.9, 4.1, 0.85, fill=C_WHITE)
+                sl.shapes.add_picture(LOGO1_PATH, Inches(0.42), Inches(6.0), width=Inches(3.8))
 
             # ── Slide 2: Financiero ──
             # FIX 2: tablas detalle en cada panel para eliminar espacio en blanco
