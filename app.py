@@ -1066,7 +1066,7 @@ def agregar_logo_word(doc, ancho_cm=3.5):
     """Inserta el logo JPV en el encabezado de todas las secciones del documento Word."""
     import os
     from docx.shared import Cm
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'imagen.png')
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Logo JPV2.png')
     if not os.path.exists(logo_path):
         return
     for section in doc.sections:
@@ -2853,12 +2853,20 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 5, 0.24, size=8, color=C_SUB)
         txt(sl, f'{page} / {total}', 12.0, 7.22, 1.1, 0.24, size=8, color=C_SUB, align=PP_ALIGN.RIGHT)
 
-    LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'imagen.png')
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    LOGO1_PATH = os.path.join(BASE_DIR, 'Logo JPV1.png')  # portada
+    LOGO2_PATH = os.path.join(BASE_DIR, 'Logo JPV2.png')  # slides internas
 
-    def logo_slide(sl, x=11.5, y=0.08, w=1.65):
-        """Inserta el logo JPV en la posición indicada (pulgadas)."""
-        if os.path.exists(LOGO_PATH):
-            sl.shapes.add_picture(LOGO_PATH, Inches(x), Inches(y), width=Inches(w))
+    def logo_slide(sl, x=None, y=None, w=None, logo=None):
+        """Inserta el logo JPV2 alineado a la derecha dentro de la barra de encabezado (0.58")."""
+        path = logo or LOGO2_PATH
+        if not os.path.exists(path):
+            return
+        # Logo JPV2: 862x176px, ratio ~4.9:1. A w=1.8" → h≈0.37" cabe dentro de barra 0.58"
+        _w = w or 1.8
+        _x = x if x is not None else (13.33 - _w - 0.15)
+        _y = y if y is not None else 0.10
+        sl.shapes.add_picture(path, Inches(_x), Inches(_y), width=Inches(_w))
 
     def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.1):
         rect(sl, x, y, w, h, fill=C_STEEL)
@@ -2970,9 +2978,11 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
             txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
             txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
-            # Logo portada: fondo blanco + logo centrado en panel derecho
-            rect(sl, 8.8, 5.6, 3.7, 1.35, fill=C_WHITE)
-            logo_slide(sl, x=9.05, y=5.72, w=3.2)
+            # Logo portada: fondo blanco en panel derecho inferior, logo JPV1 sin pisar el nombre
+            rect(sl, 8.4, 6.0, 4.7, 1.2, fill=C_WHITE)
+            if os.path.exists(LOGO1_PATH):
+                # JPV1: 1351x208px, ratio 6.5:1. A w=4.3" → h≈0.66" cabe en el recuadro
+                sl.shapes.add_picture(LOGO1_PATH, Inches(8.65), Inches(6.1), width=Inches(4.3))
 
             # ── Slide 2: Financiero ──
             # FIX 2: tablas detalle en cada panel para eliminar espacio en blanco
