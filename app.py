@@ -3060,6 +3060,11 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             except Exception:
                 txt(sl, f'Adherencia: {adh:.1f}%',        0.7, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
                 txt(sl, f'Ratio Proactivo: {rat_pro:.1f}%', 7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+            # Leyendas bajo los velocímetros
+            txt(sl, 'Porcentaje de tareas del plan semanal marcadas como realizadas sobre el total de tareas comprometidas. Meta: ≥ 80%.',
+                0.35, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
+            txt(sl, 'Proporción de actividades adicionales ejecutadas respecto al total de gestiones realizadas en la semana. Refleja la capacidad de respuesta ante imprevistos.',
+                6.7, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
 
             # ── Slide 4: Ejecución del plan programado (una fila por caso+acción con % cumplimiento) ──
             sl = blank(prs)
