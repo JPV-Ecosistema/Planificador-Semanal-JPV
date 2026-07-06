@@ -447,41 +447,45 @@ def vista_planificador(modo="Semanal"):
                 
                 if mcl_pendientes:
                     st.markdown("---")
-                    st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>🚨 Hitos MCL Heredados (Obligatorio asignar rango)</h4></div>', unsafe_allow_html=True)
-                    st.info(f"Estos compromisos provienen de tu Planificador Mensual. Selecciona los días de ejecución (se omitirán fines de semana y feriados).")
-                    
+                    st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>📅 Compromisos del Plan Mensual disponibles esta semana</h4></div>', unsafe_allow_html=True)
+                    st.info("Estas tareas provienen de tu Plan Mensual MCL y tienen fecha de compromiso dentro de esta semana. Selecciona las que incorporarás al plan semanal.")
+
+                    mcl_seleccionadas = []
                     for idx, mcl_task in enumerate(mcl_pendientes):
-                        c1, c2 = st.columns([3, 1])
-                        with c1:
-                            st.write(f"**Caso:** [{mcl_task['numero_caso']}] {mcl_task['asegurado']}")
-                            st.write(f"**Entregable:** {mcl_task['accion']}")
-                        with c2:
-                            fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
-                            nueva_fecha_mcl = st.date_input(f"Días de ejecución:", value=(fec_obj, fec_obj), key=f"mcl_fec_{idx}")
-                            
-                        act_dates = []
-                        if isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 2:
-                            s_d, e_d = nueva_fecha_mcl
-                            delta = (e_d - s_d).days
-                            for d in range(delta + 1):
-                                dt = s_d + timedelta(days=d)
-                                # Filtro de días hábiles y feriados
-                                if dt.weekday() < 5 and dt not in feriados_cl:
-                                    act_dates.append(dt)
-                        elif isinstance(nueva_fecha_mcl, (tuple, list)) and len(nueva_fecha_mcl) == 1:
-                            act_dates = [nueva_fecha_mcl[0]]
-                        else:
-                            act_dates = [nueva_fecha_mcl]
+                        fec_obj = datetime.strptime(mcl_task['fecha_compromiso'], "%Y-%m-%d")
+                        with st.container():
+                            c_chk, c_info, c_fecha = st.columns([0.5, 3.5, 2])
+                            with c_chk:
+                                incorporar = st.checkbox("", key=f"mcl_chk_{idx}", value=True)
+                            with c_info:
+                                st.markdown(f"**[{mcl_task['numero_caso']}]** {mcl_task.get('asegurado','')}")
+                                st.caption(f"Acción: {mcl_task['accion']}")
+                            with c_fecha:
+                                nueva_fecha_mcl = st.date_input(
+                                    "Fecha de ejecución",
+                                    value=fec_obj,
+                                    key=f"mcl_fec_{idx}",
+                                    disabled=not incorporar
+                                )
+                            if incorporar:
+                                mcl_seleccionadas.append((mcl_task, nueva_fecha_mcl))
 
-                        if not act_dates: 
-                            act_dates = [s_d if 's_d' in locals() else nueva_fecha_mcl] # Paracaídas si eligen solo feriados
+                    for mcl_task, dt in mcl_seleccionadas:
+                        task_to_add = mcl_task.copy()
+                        task_to_add['fecha_compromiso'] = dt.strftime("%Y-%m-%d")
+                        task_to_add['id_mcl_origen'] = mcl_task.get('id_transaccion', '')
+                        task_to_add['tipo_actividad'] = tipo_actividad_actual
+                        plan_transaccional.append(task_to_add)
 
-                        for dt in act_dates:
-                            task_to_add = mcl_task.copy()
-                            task_to_add['fecha_compromiso'] = dt.strftime("%Y-%m-%d")
-                            task_to_add['id_mcl_origen'] = mcl_task['id_transaccion']
-                            task_to_add['tipo_actividad'] = tipo_actividad_actual
-                            plan_transaccional.append(task_to_add)
+                    # Guardar flag en el mensual para las tareas que el ajustador seleccionó
+                    ids_incorporados = {mcl_task.get('id_transaccion') for mcl_task, _ in mcl_seleccionadas}
+                    mcl_actualizado = False
+                    for t in mcl_data:
+                        if t.get('id_transaccion') in ids_incorporados and not t.get('agendado_semana'):
+                            t['agendado_semana'] = target_week_id
+                            mcl_actualizado = True
+                    if mcl_actualizado:
+                        save_plan_actualizado(mcl_path, mcl_data)
 
             st.markdown("---")
             st.header("1. Selección de Casos Operativos Regulares")
