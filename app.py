@@ -477,15 +477,8 @@ def vista_planificador(modo="Semanal"):
                         task_to_add['tipo_actividad'] = tipo_actividad_actual
                         plan_transaccional.append(task_to_add)
 
-                    # Guardar flag en el mensual para las tareas que el ajustador seleccionó
-                    ids_incorporados = {mcl_task.get('id_transaccion') for mcl_task, _ in mcl_seleccionadas}
-                    mcl_actualizado = False
-                    for t in mcl_data:
-                        if t.get('id_transaccion') in ids_incorporados and not t.get('agendado_semana'):
-                            t['agendado_semana'] = target_week_id
-                            mcl_actualizado = True
-                    if mcl_actualizado:
-                        save_plan_actualizado(mcl_path, mcl_data)
+                    # Guardar los IDs seleccionados en session_state para usarlos al presionar GUARDAR
+                    st.session_state['mcl_ids_seleccionados'] = {mcl_task.get('id_transaccion') for mcl_task, _ in mcl_seleccionadas}
 
             st.markdown("---")
             st.header("1. Selección de Casos Operativos Regulares")
@@ -689,11 +682,14 @@ def vista_planificador(modo="Semanal"):
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
                             
                             if 'mcl_data' in locals() and mcl_data:
-                                mcl_ids_agendados = [t['id_mcl_origen'] for t in plan_transaccional if 'id_mcl_origen' in t]
+                                ids_a_marcar = st.session_state.get('mcl_ids_seleccionados', set())
+                                mcl_modificado = False
                                 for t in mcl_data:
-                                    if t['id_transaccion'] in mcl_ids_agendados:
-                                        t['agendado_semana'] = True
-                                save_plan_actualizado(mcl_path, mcl_data) 
+                                    if t.get('id_transaccion') in ids_a_marcar and not t.get('agendado_semana'):
+                                        t['agendado_semana'] = target_week_id
+                                        mcl_modificado = True
+                                if mcl_modificado:
+                                    save_plan_actualizado(mcl_path, mcl_data) 
                                 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.success(f"Registro exitoso para la {semana_opcion}. Documento respaldado.")
