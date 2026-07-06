@@ -3061,19 +3061,40 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
                 txt(sl, f'Adherencia: {adh:.1f}%',        0.7, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
                 txt(sl, f'Ratio Proactivo: {rat_pro:.1f}%', 7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
 
-            # ── Slide 4: Casos realizados ──
-            # FIX 4: agregar Nickname y Hon. (UF)
-            # FIX 5: si t_prog==0 → sin plan registrado
+            # ── Slide 4: Ejecución del plan programado (una fila por caso+acción con % cumplimiento) ──
             sl = blank(prs)
-            header(sl, '✅ Trabajo Programado Realizado', C_NAVY)
+            header(sl, '✅ Ejecución del Plan Programado', C_NAVY)
             footer(sl, 4, TOTAL, meta)
-            hdrs4 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Realizada', 'Tipo', 'Hon. (UF)']
+            hdrs4 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción', '✅ En Plazo', '⚠️ Atraso', '❌ Pendiente', 'Hon. (UF)']
             rows4 = []
-            if not df_aj_real.empty:
-                for _, row in df_aj_real[df_aj_real['tipo_actividad'] == 'Programada'].iterrows():
-                    accion = str(row.get('accion', ''))
-                    tipo = 'IFL' if 'Informe Final' in accion or 'Rechazo' in accion else ('Interm.' if any(k in accion for k in ['Intermedio', 'Inspección', 'Visita', 'Coordinación', 'Revisión', 'Análisis']) else 'Prelim.')
-                    rows4.append([str(row.get('numero_caso', '')), get_nick(row), str(row.get('asegurado', ''))[:28], accion[:45], tipo, get_hon(row)])
+            if not df_aj.empty:
+                df_prog = df_aj[df_aj['tipo_actividad'] == 'Programada'].copy()
+                for (caso, accion), grp in df_prog.groupby(['numero_caso', 'accion'], sort=False):
+                    total = len(grp)
+                    a_tiempo, con_atraso = 0, 0
+                    for _, r in grp.iterrows():
+                        if r.get('estado_cumplimiento') == 'Realizado':
+                            try:
+                                fej = pd.to_datetime(str(r.get('fecha_ejecucion', '')), errors='coerce')
+                                fcom = pd.to_datetime(str(r.get('fecha_compromiso', '')), errors='coerce')
+                                if pd.notna(fej) and pd.notna(fcom) and fej.date() > fcom.date():
+                                    con_atraso += 1
+                                else:
+                                    a_tiempo += 1
+                            except Exception:
+                                a_tiempo += 1
+                    pendiente = total - a_tiempo - con_atraso
+                    row0 = grp.iloc[0]
+                    rows4.append([
+                        str(caso),
+                        get_nick(row0),
+                        str(row0.get('asegurado', ''))[:25],
+                        str(accion)[:38],
+                        f'{round(a_tiempo/total*100)}%',
+                        f'{round(con_atraso/total*100)}%',
+                        f'{round(pendiente/total*100)}%',
+                        get_hon(row0)
+                    ])
             if t_prog == 0:
                 no_plan_state(sl)
             elif rows4:
@@ -3081,7 +3102,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
                 rh4 = min(5.85 / (n4 + 1), 0.38)
                 tabla(sl, hdrs4, rows4, 0.3, 0.72, 12.7, rh4 * (min(n4, MAX_ROWS) + 1),
                       hdr_color=RGBColor(40, 167, 69), alt_color=C_STEEL,
-                      col_widths=[1.4, 1.5, 2.6, 4.5, 1.0, 1.2])
+                      col_widths=[1.2, 1.3, 2.2, 3.8, 1.0, 0.9, 1.1, 1.2])
             else:
                 empty_state(sl, 'Sin tareas programadas realizadas', 'Todas las tareas programadas quedaron pendientes.')
 
