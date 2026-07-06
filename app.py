@@ -337,8 +337,8 @@ def vista_planificador(modo="Semanal"):
             st.title("🗓️ Planificador Semanal")
             st.markdown("Seleccione los casos de la Base Maestra que proyecta gestionar.")
         else:
-            st.title("🏆 Planificador Mensual MCL")
-            st.markdown("Gestión estratégica de casos complejos (Major and Complex Losses > 5000 UF / > 200k USD).")
+            st.title("🏆 Planificador Mensual")
+            st.markdown("Planificación estratégica de compromisos mensuales por caso.")
             
     with col_t2:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -396,10 +396,9 @@ def vista_planificador(modo="Semanal"):
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
             
             if modo == "Mensual":
-                casos_vigentes = casos_vigentes[casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
-                st.warning(f"📊 Filtro MCL Activo ({mes_opcion}): Mostrando exclusivamente siniestros complejos.")
+                st.info(f"📅 Planificación mensual ({mes_opcion}): Todos los casos vigentes disponibles.")
             else:
-                casos_vigentes = casos_vigentes[~casos_vigentes.apply(lambda x: calcular_tramo_mcl(x)[1], axis=1)]
+                pass  # Semanal: todos los casos disponibles sin filtro de monto
                 
             estados_maestros = sorted([str(x) for x in df_maestro['Estado'].dropna().unique() if str(x).strip()]) if 'Estado' in df_maestro.columns else ["Ajuste", "IFL", "Liquidación"]
             subestados_maestros = sorted([str(x) for x in df_maestro['Sub estado'].dropna().unique() if str(x).strip()]) if 'Sub estado' in df_maestro.columns else ["En Proceso", "Informe Preliminar", "Revisión Jefatura"]
@@ -448,7 +447,7 @@ def vista_planificador(modo="Semanal"):
                 if mcl_pendientes:
                     st.markdown("---")
                     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>📅 Compromisos del Plan Mensual disponibles esta semana</h4></div>', unsafe_allow_html=True)
-                    st.info("Estas tareas provienen de tu Plan Mensual MCL y tienen fecha de compromiso dentro de esta semana. Selecciona las que incorporarás al plan semanal.")
+                    st.info("Estas tareas provienen de tu Plan Mensual y tienen fecha de compromiso dentro de esta semana. Selecciona las que incorporarás al plan semanal.")
 
                     mcl_seleccionadas = []
                     for idx, mcl_task in enumerate(mcl_pendientes):
@@ -677,7 +676,7 @@ def vista_planificador(modo="Semanal"):
                         if modo == "Mensual":
                             plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Plan Mensual MCL ({mes_opcion}) actualizado exitosamente.")
+                            st.success(f"Plan Mensual ({mes_opcion}) actualizado exitosamente.")
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
                             
@@ -3319,14 +3318,14 @@ def main():
 
     opcion = st.sidebar.radio(
         "Ir a:",
-        ["Planificador Mensual MCL", "Planificador Semanal", "Programa Diario", "Reportes de Gestión"]
+        ["Planificador Mensual", "Planificador Semanal", "Programa Diario", "Reportes de Gestión"]
     )
 
     st.sidebar.markdown("---")
     render_sidebar_base_maestra()
     st.sidebar.markdown("---")
 
-    if opcion == "Planificador Mensual MCL":
+    if opcion == "Planificador Mensual":
         vista_planificador("Mensual")
     elif opcion == "Planificador Semanal":
         vista_planificador("Semanal")
