@@ -407,7 +407,12 @@ def vista_planificador(modo="Semanal"):
                 plan_historico, path_boveda = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
             else:
                 plan_historico, path_boveda = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
-            
+
+            # Mostrar mensaje de éxito persistido desde un guardado anterior (sobrevive al st.rerun())
+            _msg_key = f"_plan_ok_{modo}"
+            if st.session_state.get(_msg_key):
+                st.success(st.session_state.pop(_msg_key))
+
             # --- VISIBILIDAD Y EDICIÓN DEL PLAN VIGENTE ---
             if plan_historico:
                 puede_editar = (modo == "Mensual") or (modo == "Semanal" and not es_adicional)
@@ -739,13 +744,15 @@ def vista_planificador(modo="Semanal"):
                 st.info(f"Se consolidaron **{len(plan_transaccional)} transacciones** para guardar.")
                 if st.button(f"💾 GUARDAR REGISTROS ({tipo_actividad_actual.upper()})"):
                     try:
+                        n = len(plan_transaccional)
                         if modo == "Mensual":
                             plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Plan Mensual ({mes_opcion}) actualizado exitosamente.")
+                            st.session_state['_plan_ok_Mensual'] = f"✅ Plan Mensual ({mes_opcion}): {n} registro(s) agregados exitosamente."
+                            st.rerun()
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
-                            
+
                             if 'mcl_data' in locals() and mcl_data:
                                 ids_a_marcar = st.session_state.get('mcl_ids_seleccionados', set())
                                 mcl_modificado = False
@@ -754,10 +761,10 @@ def vista_planificador(modo="Semanal"):
                                         t['agendado_semana'] = target_week_id
                                         mcl_modificado = True
                                 if mcl_modificado:
-                                    save_plan_actualizado(mcl_path, mcl_data) 
-                                
+                                    save_plan_actualizado(mcl_path, mcl_data)
+
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.success(f"Registro exitoso para la {semana_opcion}. Documento respaldado.")
+                            st.session_state['_plan_ok_Semanal'] = f"✅ Plan Semanal ({semana_opcion}): {n} registro(s) guardados correctamente."
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
@@ -831,7 +838,11 @@ def vista_diario():
     
     if ajustador_input:
         plan_data, filepath = load_plan_semanal(ajustador_input)
-        
+
+        # Mostrar mensaje de éxito persistido desde un guardado anterior (sobrevive al st.rerun())
+        if st.session_state.get('_diario_ok'):
+            st.success(st.session_state.pop('_diario_ok'))
+
         # --- CARGA DE CASOS PARA AUTOCOMPLETADO (INCLUYE UF) ---
         opciones_casos = ["Gestión Manual (Caso fuera de sistema)"]
         dict_casos = {}
@@ -921,7 +932,7 @@ def vista_diario():
                 if len(nuevas_actividades) > 0:
                     plan_data.extend(nuevas_actividades)
                     save_plan_actualizado(filepath, plan_data)
-                    st.success(f"¡{len(nuevas_actividades)} actividades no programadas incorporadas al reporte general exitosamente!")
+                    st.session_state['_diario_ok'] = f"✅ {len(nuevas_actividades)} actividad(es) no programada(s) incorporadas al plan correctamente."
                     st.rerun()
                 else:
                     st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada en alguna de las filas para poder guardar.")
@@ -1042,12 +1053,14 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
-                        st.success("¡Base de datos local actualizada y respaldada en la nube corporativa!")
+                        n_real = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
+                        n_tot  = len(plan_data)
+                        st.session_state['_diario_ok'] = f"✅ Cumplimiento actualizado: {n_real} de {n_tot} tarea(s) marcadas como realizadas."
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al escribir en el disco/nube: {e}")
                 else:
-                    st.info("No se detectaron cambios.")
+                    st.info("No se detectaron cambios en el estado de las tareas.")
             
             st.markdown("---")
             progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
