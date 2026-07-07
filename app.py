@@ -408,24 +408,90 @@ def vista_planificador(modo="Semanal"):
             else:
                 plan_historico, path_boveda = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
             
-            # --- VISIBILIDAD DEL PLAN VIGENTE ---
+            # --- VISIBILIDAD Y EDICIÓN DEL PLAN VIGENTE ---
             if plan_historico:
-                with st.expander(f"📋 Ver Plan Vigente ({len(plan_historico)} acciones registradas)", expanded=True):
-                    df_ph = pd.DataFrame(plan_historico)
-                    if not df_ph.empty:
-                        df_show = df_ph[['tipo_actividad', 'categoria', 'numero_caso', 'accion', 'fecha_compromiso', 'estado_cumplimiento']].copy()
-                        df_show = df_show.rename(columns={'tipo_actividad': 'Tipo', 'categoria': 'Categoría', 'numero_caso': 'Caso', 'accion': 'Acción', 'fecha_compromiso': 'Fecha', 'estado_cumplimiento': 'Estado'})
-                        st.dataframe(df_show, use_container_width=True, hide_index=True)
-                        
-                with st.expander("🚨 Zona de Control: Modificar / Resetear Período Activo", expanded=False):
-                    st.markdown("Si cometiste un error crítico, puedes vaciar el plan actual completo para volver a formularlo.")
-                    if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
-                        try:
-                            save_plan_actualizado(path_boveda, [])
-                            st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
-                            st.rerun()
-                        except Exception as reset_err:
-                            st.error(f"Error al ejecutar el reseteo: {reset_err}")
+                puede_editar = (modo == "Mensual") or (modo == "Semanal" and not es_adicional)
+
+                if puede_editar:
+                    with st.expander(f"✏️ Ver y Editar Plan Vigente ({len(plan_historico)} acciones)", expanded=True):
+                        df_ph_full = pd.DataFrame(plan_historico).reset_index(drop=True)
+                        if not df_ph_full.empty:
+                            st.caption("Edita la Acción, Fecha o Tipo directamente en la tabla. Usa el ícono 🗑️ al final de cada fila para eliminarla. Haz clic en 'Guardar Cambios' para confirmar.")
+                            _dcols = [c for c in ['numero_caso', 'asegurado', 'accion', 'fecha_compromiso', 'tipo_actividad', 'estado_cumplimiento'] if c in df_ph_full.columns]
+                            df_display = df_ph_full[_dcols].copy()
+                            if 'fecha_compromiso' in df_display.columns:
+                                df_display['fecha_compromiso'] = pd.to_datetime(df_display['fecha_compromiso'], errors='coerce').dt.date
+                            _col_cfg = {
+                                'numero_caso':        st.column_config.TextColumn('N° Caso',         disabled=True,  width='small'),
+                                'asegurado':          st.column_config.TextColumn('Asegurado',        disabled=True,  width='medium'),
+                                'accion':             st.column_config.TextColumn('Acción',                           width='large'),
+                                'fecha_compromiso':   st.column_config.DateColumn('Fecha Compromiso', format='DD/MM/YYYY', width='small'),
+                                'tipo_actividad':     st.column_config.SelectboxColumn('Tipo',        options=['Programada', 'Actividad Adicional'], width='small'),
+                                'estado_cumplimiento':st.column_config.SelectboxColumn('Estado',      options=['Pendiente', 'Realizado'], width='small'),
+                            }
+                            _editor_key = f"editor_plan_{modo}_{offset_weeks if modo == 'Semanal' else offset_months}"
+                            edited_df = st.data_editor(
+                                df_display,
+                                num_rows="dynamic",
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config=_col_cfg,
+                                key=_editor_key
+                            )
+                            col_sv, col_res = st.columns([3, 1])
+                            with col_sv:
+                                if st.button("💾 Guardar Cambios del Plan", key="btn_guardar_edicion", type="primary", use_container_width=True):
+                                    try:
+                                        plan_modificado = []
+                                        for orig_idx in edited_df.index:
+                                            if orig_idx < len(df_ph_full):
+                                                task = df_ph_full.loc[orig_idx].to_dict()
+                                                row = edited_df.loc[orig_idx]
+                                                if 'accion' in row and pd.notna(row['accion']):
+                                                    task['accion'] = str(row['accion'])
+                                                if 'fecha_compromiso' in row and row['fecha_compromiso'] is not None:
+                                                    try:
+                                                        task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
+                                                    except AttributeError:
+                                                        task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                                                if 'tipo_actividad' in row and pd.notna(row.get('tipo_actividad')):
+                                                    task['tipo_actividad'] = str(row['tipo_actividad'])
+                                                if 'estado_cumplimiento' in row and pd.notna(row.get('estado_cumplimiento')):
+                                                    task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
+                                                plan_modificado.append(task)
+                                        save_plan_actualizado(path_boveda, plan_modificado)
+                                        st.success(f"Plan actualizado: {len(plan_modificado)} acciones guardadas.")
+                                        st.rerun()
+                                    except Exception as edit_err:
+                                        st.error(f"Error al guardar cambios: {edit_err}")
+                            with col_res:
+                                if st.button("🗑️ Anular Plan Completo", key="btn_pánico_reset", use_container_width=True):
+                                    try:
+                                        save_plan_actualizado(path_boveda, [])
+                                        st.success("¡Plan anulado! La pizarra está limpia.")
+                                        st.rerun()
+                                    except Exception as reset_err:
+                                        st.error(f"Error al resetear: {reset_err}")
+                else:
+                    with st.expander(f"📋 Plan Vigente — Solo Lectura ({len(plan_historico)} acciones)", expanded=True):
+                        df_ph = pd.DataFrame(plan_historico)
+                        if not df_ph.empty:
+                            _scols = [c for c in ['tipo_actividad', 'numero_caso', 'asegurado', 'accion', 'fecha_compromiso', 'estado_cumplimiento'] if c in df_ph.columns]
+                            df_show = df_ph[_scols].copy().rename(columns={
+                                'tipo_actividad': 'Tipo', 'numero_caso': 'Caso', 'asegurado': 'Asegurado',
+                                'accion': 'Acción', 'fecha_compromiso': 'Fecha', 'estado_cumplimiento': 'Estado'
+                            })
+                            st.dataframe(df_show, use_container_width=True, hide_index=True)
+                        st.info("🔒 La ventana de planificación está cerrada. Solo es posible agregar Actividades Adicionales.")
+                    with st.expander("🚨 Zona de Control: Resetear Período Activo", expanded=False):
+                        st.markdown("Si cometiste un error crítico, puedes vaciar el plan actual completo para volver a formularlo.")
+                        if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
+                            try:
+                                save_plan_actualizado(path_boveda, [])
+                                st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
+                                st.rerun()
+                            except Exception as reset_err:
+                                st.error(f"Error al ejecutar el reseteo: {reset_err}")
 
             plan_transaccional = []
             
