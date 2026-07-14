@@ -465,7 +465,16 @@ def vista_planificador(modo="Semanal"):
                                                     task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
                                                 plan_modificado.append(task)
                                         save_plan_actualizado(path_boveda, plan_modificado)
-                                        st.success(f"Plan actualizado: {len(plan_modificado)} acciones guardadas.")
+                                        st.session_state[f"_plan_ok_{modo}"] = f"✅ Plan actualizado: {len(plan_modificado)} acción(es) guardadas."
+                                        _form_prefixes = (
+                                            'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
+                                            'cat_', 'sub_', 'man_', 'fecha_',
+                                            'num_comercial', 'txt_com_', 'fec_com_',
+                                            'num_admin', 'txt_adm_', 'fec_adm_',
+                                            'mcl_chk_', 'mcl_fec_',
+                                        )
+                                        for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
+                                            del st.session_state[_k]
                                         st.rerun()
                                     except Exception as edit_err:
                                         st.error(f"Error al guardar cambios: {edit_err}")
@@ -564,7 +573,8 @@ def vista_planificador(modo="Semanal"):
             selected_indices = st.multiselect(
                 "Seleccione los casos que intervendrá:",
                 options=casos_vigentes.index.tolist(),
-                format_func=formato_caso_nickname
+                format_func=formato_caso_nickname,
+                key="multiselect_casos_plan"
             )
             
             if selected_indices:
@@ -749,7 +759,6 @@ def vista_planificador(modo="Semanal"):
                             plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.session_state['_plan_ok_Mensual'] = f"✅ Plan Mensual ({mes_opcion}): {n} registro(s) agregados exitosamente."
-                            st.rerun()
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
 
@@ -765,7 +774,20 @@ def vista_planificador(modo="Semanal"):
 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.session_state['_plan_ok_Semanal'] = f"✅ Plan Semanal ({semana_opcion}): {n} registro(s) guardados correctamente."
-                            st.rerun()
+
+                        # Limpiar estado del formulario para evitar re-envío accidental tras el rerun.
+                        # Streamlit preserva los valores de los widgets en session_state; si no se borran,
+                        # plan_transaccional se reconstruye con las mismas tareas y el botón reaparece.
+                        _form_prefixes = (
+                            'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
+                            'cat_', 'sub_', 'man_', 'fecha_',
+                            'num_comercial', 'txt_com_', 'fec_com_',
+                            'num_admin', 'txt_adm_', 'fec_adm_',
+                            'mcl_chk_', 'mcl_fec_',
+                        )
+                        for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
+                            del st.session_state[_k]
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
