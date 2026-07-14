@@ -3196,6 +3196,13 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
                         f'{round(pendiente/total*100)}%',
                         get_hon(row0)
                     ])
+            # Propuesta D: show Hon. (UF) only on first action row of each case
+            _prev_caso4 = None
+            for _r4 in rows4:
+                if _r4[0] == _prev_caso4:
+                    _r4[7] = ''
+                _prev_caso4 = _r4[0]
+
             if t_prog == 0:
                 no_plan_state(sl)
             elif rows4:
@@ -3215,19 +3222,25 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             footer(sl, 5, TOTAL, meta)
             txt(sl, 'Tareas comprometidas en el plan semanal que no fueron ejecutadas. Quedan pendientes para la próxima semana.',
                 0.35, 0.72, 12.6, 0.38, size=9.5, color=C_MID, italic=True)
-            hdrs5 = ['N° Caso', 'Nickname', 'Asegurado', 'Acción Planificada', 'Fecha Comprometida', 'Hon. (UF)']
+            hdrs5 = ['N° Caso', 'Nickname', 'Asegurado', 'Acciones Pendientes', 'Rango de Fechas', 'Hon. (UF)']
             rows5 = []
             if not df_aj.empty:
                 df_no_real_df = df_aj[(df_aj['tipo_actividad'] == 'Programada') & (df_aj['estado_cumplimiento'] != 'Realizado')]
-                for _, row in df_no_real_df.iterrows():
+                # Propuesta B: one row per case, listing all pending actions
+                for caso, grp in df_no_real_df.groupby('numero_caso', sort=False):
+                    row0 = grp.iloc[0]
+                    acciones_unicas = list(dict.fromkeys(str(a)[:45] for a in grp['accion'].dropna() if str(a).strip()))
+                    acciones_txt = ' | '.join(acciones_unicas)[:80]
                     fecha_str = ''
                     try:
-                        fv = row.get('fecha_compromiso', row.get('fecha_programada', ''))
-                        if fv and str(fv).strip() not in ('', 'nan', 'NaT', 'None'):
-                            fecha_str = pd.to_datetime(str(fv), errors='coerce').strftime('%d/%m/%Y')
+                        fechas_dt = pd.to_datetime(grp['fecha_compromiso'], errors='coerce').dropna()
+                        if len(fechas_dt) > 0:
+                            fmin = fechas_dt.min().strftime('%d/%m/%Y')
+                            fmax = fechas_dt.max().strftime('%d/%m/%Y')
+                            fecha_str = fmin if fmin == fmax else f'{fmin} – {fmax}'
                     except Exception:
                         pass
-                    rows5.append([str(row.get('numero_caso', '')), get_nick(row), str(row.get('asegurado', ''))[:28], str(row.get('accion', ''))[:45], fecha_str, get_hon(row)])
+                    rows5.append([str(caso), get_nick(row0), str(row0.get('asegurado', ''))[:28], acciones_txt, fecha_str, get_hon(row0)])
             if t_prog == 0:
                 no_plan_state(sl)
             elif rows5:
