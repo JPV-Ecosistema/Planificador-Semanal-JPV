@@ -2589,8 +2589,10 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             return 'ActaInspeccion'
         elif 'informe final de liquidación' in a:
             return 'IFL'
-        elif 'carta de cobertura (rechazo)' in a or 'carta de análisis de pérdidas' in a:
-            return 'RechazoCobertura'
+        elif 'carta de cobertura (rechazo)' in a:
+            return 'Rechazo'
+        elif 'carta de análisis de pérdidas' in a:
+            return 'AnalisisPerdidas'
         elif 'informe intermedio' in a:
             return 'Intermedio'
         elif 'preliminar' in a:
@@ -2732,10 +2734,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     secciones = [
         ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
         ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
-        ('RechazoCobertura',   '4. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',        '8B0000'),
-        ('Intermedio',         '5. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '6. Informes Preliminares',                                       '217346'),
-        ('ImpugnacionAdendum', '7. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('Rechazo',            '4. Cartas de Cobertura (Rechazo)',                               '8B0000'),
+        ('AnalisisPerdidas',   '5. Cartas de Análisis de Pérdidas',                              'B9770E'),
+        ('Intermedio',         '6. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '7. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '8. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
     hay_datos = False
