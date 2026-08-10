@@ -2647,6 +2647,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     df_casos_nuevos = pd.DataFrame()
     if not df_bm.empty and dias_semana_target:
         col_caso_n = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+        col_div_n  = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
         col_nick_n = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
         col_corr_n = 'Corredora' if 'Corredora' in df_bm.columns else df_bm.columns[7]
         col_aj_n   = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
@@ -2662,38 +2663,45 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 (df_bm_n['_fecha_creacion'] >= fecha_ini) &
                 (df_bm_n['_fecha_creacion'] <= fecha_fin)
             ].copy()
+            df_casos_nuevos['_division'] = df_casos_nuevos[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
 
     doc.add_heading('1. Casos Nuevos de la Semana', level=1)
     if not df_casos_nuevos.empty:
         headers_cn = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Fecha de Creación']
-        table_cn = doc.add_table(rows=1, cols=len(headers_cn))
-        table_cn.style = 'Table Grid'
-        hdr_cells = table_cn.rows[0].cells
-        for i, col_name in enumerate(headers_cn):
-            hdr_cells[i].text = col_name
-            run = hdr_cells[i].paragraphs[0].runs[0]
-            run.font.bold = True
-            run.font.color.rgb = RGBColor(255, 255, 255)
-            run.font.size = Pt(9)
-            shading_elm = parse_xml(r'<w:shd {} w:fill="6C3483"/>'.format(nsdecls('w')))
-            hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-        for _, row in df_casos_nuevos.sort_values('_fecha_creacion').iterrows():
-            row_cells = table_cn.add_row().cells
-            row_cells[0].text = str(row.get(col_aj_n, ''))
-            run_aj = row_cells[0].paragraphs[0].runs[0]
-            run_aj.font.bold = True
-            run_aj.font.color.rgb = RGBColor(0, 51, 102)
-            run_aj.font.size = Pt(9)
-            row_cells[1].text = str(row.get(col_caso_n, ''))
-            row_cells[2].text = str(row.get(col_nick_n, ''))
-            row_cells[3].text = str(row.get(col_aseg_n, ''))
-            row_cells[4].text = str(row.get(col_corr_n, ''))
-            fecha_c = row.get('_fecha_creacion')
-            row_cells[5].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
-            for j in range(1, len(headers_cn)):
-                if row_cells[j].paragraphs[0].runs:
-                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+        for division in sorted(df_casos_nuevos['_division'].unique()):
+            df_div = df_casos_nuevos[df_casos_nuevos['_division'] == division]
+            doc.add_heading(f'{division} ({len(df_div)})', level=2)
+
+            table_cn = doc.add_table(rows=1, cols=len(headers_cn))
+            table_cn.style = 'Table Grid'
+            hdr_cells = table_cn.rows[0].cells
+            for i, col_name in enumerate(headers_cn):
+                hdr_cells[i].text = col_name
+                run = hdr_cells[i].paragraphs[0].runs[0]
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(255, 255, 255)
+                run.font.size = Pt(9)
+                shading_elm = parse_xml(r'<w:shd {} w:fill="6C3483"/>'.format(nsdecls('w')))
+                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+            for _, row in df_div.sort_values('_fecha_creacion').iterrows():
+                row_cells = table_cn.add_row().cells
+                row_cells[0].text = str(row.get(col_aj_n, ''))
+                run_aj = row_cells[0].paragraphs[0].runs[0]
+                run_aj.font.bold = True
+                run_aj.font.color.rgb = RGBColor(0, 51, 102)
+                run_aj.font.size = Pt(9)
+                row_cells[1].text = str(row.get(col_caso_n, ''))
+                row_cells[2].text = str(row.get(col_nick_n, ''))
+                row_cells[3].text = str(row.get(col_aseg_n, ''))
+                row_cells[4].text = str(row.get(col_corr_n, ''))
+                fecha_c = row.get('_fecha_creacion')
+                row_cells[5].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+                for j in range(1, len(headers_cn)):
+                    if row_cells[j].paragraphs[0].runs:
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+            doc.add_paragraph('')
     else:
         doc.add_paragraph('No se registraron casos nuevos en este período.')
     doc.add_paragraph('')
