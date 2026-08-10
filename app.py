@@ -663,6 +663,24 @@ def vista_planificador(modo="Semanal"):
 
                                 if not act_dates: act_dates = [s_d if 's_d' in locals() else fecha_compromiso_range]
 
+                                # --- ALERTA DE DUPLICIDAD CON EL PLAN MENSUAL ---
+                                # Misma acción (categoría + detalle), mismo caso y misma fecha ya presentes
+                                # en el Plan Mensual: probablemente la misma tarea cargada dos veces.
+                                if modo == "Semanal" and mcl_data:
+                                    fechas_dup = set()
+                                    for t in mcl_data:
+                                        if (str(t.get('numero_caso', '')).strip() == str(caso_num).strip()
+                                                and str(t.get('accion', '')).strip() == accion_final.strip()):
+                                            try:
+                                                fec_mensual = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+                                                if fec_mensual in act_dates:
+                                                    fechas_dup.add(fec_mensual)
+                                            except Exception:
+                                                pass
+                                    if fechas_dup:
+                                        fechas_str = ", ".join(f.strftime("%d/%m") for f in sorted(fechas_dup))
+                                        st.warning(f"⚠️ **Posible duplicación:** la actividad \"{accion_final}\" del caso {caso_num} ya está registrada en el Plan Mensual para el/los día(s) {fechas_str}.")
+
                                 for dt in act_dates:
                                     plan_transaccional.append({
                                         "id_transaccion": str(uuid.uuid4()),
