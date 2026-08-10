@@ -359,7 +359,7 @@ def vista_planificador(modo="Semanal"):
         "Inspección": ["Presencial", "Remota", "Otro / Manual"],
         "Correos": ["Solicitud de Antecedentes", "Reiteracion 1", "Reiteracion 2", "Reiteracion 3", "Ultimatum", "Cierre por falta de interés", "Otro / Manual"],
         "Reunión": ["Presencial", "Presentación pptx", "On line", "Presentacion on line", "Otro / Manual"],
-        "Preparar Informe": ["Preliminar Extendido", "Preliminar Corto", "Carta de Análisis de Pérdidas", "Carta de Cobertura (Rechazo)", "Informe Intermedio 1", "Informe Intermedio 2", "Informe Intermedio 3", "Informe Intermedio 4", "Informe Intermedio 5", "Informe Intermedio", "Informe Final de Liquidación", "Respuesta a Impugnación", "Ademdum", "Otro / Manual"],
+        "Preparar Informe": ["Acta de Inspección", "Preliminar Extendido", "Preliminar Corto", "Carta de Análisis de Pérdidas", "Carta de Cobertura (Rechazo)", "Informe Intermedio 1", "Informe Intermedio 2", "Informe Intermedio 3", "Informe Intermedio 4", "Informe Intermedio 5", "Informe Intermedio", "Informe Final de Liquidación", "Respuesta a Impugnación", "Ademdum", "Otro / Manual"],
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
     
@@ -2551,7 +2551,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
     # Clasificar por tipo de informe
     def clasificar_informe(accion):
         a = str(accion).lower()
-        if 'informe final de liquidación' in a:
+        if 'acta de inspección' in a:
+            return 'ActaInspeccion'
+        elif 'informe final de liquidación' in a:
             return 'IFL'
         elif 'carta de cobertura (rechazo)' in a or 'carta de análisis de pérdidas' in a:
             return 'RechazoCobertura'
@@ -2610,11 +2612,12 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
 
     secciones = [
-        ('IFL',                '1. Informes Finales de Liquidación',                           '003366'),
-        ('RechazoCobertura',   '2. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',       '8B0000'),
-        ('Intermedio',         '3. Informes Intermedios',                                       '004A99'),
-        ('Preliminar',         '4. Informes Preliminares',                                      '217346'),
-        ('ImpugnacionAdendum', '5. Respuestas a Impugnación / Adendum',                          '996515'),
+        ('ActaInspeccion',     '1. Actas de Inspección',                                        '5B2C6F'),
+        ('IFL',                '2. Informes Finales de Liquidación',                            '003366'),
+        ('RechazoCobertura',   '3. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',        '8B0000'),
+        ('Intermedio',         '4. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '5. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '6. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
     hay_datos = False
