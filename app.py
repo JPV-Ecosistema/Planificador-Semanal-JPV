@@ -386,6 +386,10 @@ def vista_planificador(modo="Semanal"):
 
     tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
 
+    if modo == "Semanal":
+        viernes_target = lunes_target + timedelta(days=4)
+        st.info(f"📅 **Estás planificando la semana: Lunes {lunes_target.strftime('%d/%m')} — Viernes {viernes_target.strftime('%d/%m')}**")
+
     df_maestro = load_master_base()
     
     if df_maestro is not None:
