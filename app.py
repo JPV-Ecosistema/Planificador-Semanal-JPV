@@ -2551,12 +2551,16 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
     # Clasificar por tipo de informe
     def clasificar_informe(accion):
         a = str(accion).lower()
-        if 'informe final de liquidación' in a or 'carta de cobertura (rechazo)' in a:
+        if 'informe final de liquidación' in a:
             return 'IFL'
+        elif 'carta de cobertura (rechazo)' in a or 'carta de análisis de pérdidas' in a:
+            return 'RechazoCobertura'
         elif 'informe intermedio' in a:
             return 'Intermedio'
         elif 'preliminar' in a:
             return 'Preliminar'
+        elif 'respuesta a impugnación' in a or 'ademdum' in a:
+            return 'ImpugnacionAdendum'
         return None
 
     df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
@@ -2606,9 +2610,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
 
     secciones = [
-        ('IFL',        '1. Informes Finales de Liquidación y Cartas de Cobertura/Rechazo', '003366'),
-        ('Intermedio', '2. Informes Intermedios',                                           '004A99'),
-        ('Preliminar', '3. Informes Preliminares',                                          '217346'),
+        ('IFL',                '1. Informes Finales de Liquidación',                           '003366'),
+        ('RechazoCobertura',   '2. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',       '8B0000'),
+        ('Intermedio',         '3. Informes Intermedios',                                       '004A99'),
+        ('Preliminar',         '4. Informes Preliminares',                                      '217346'),
+        ('ImpugnacionAdendum', '5. Respuestas a Impugnación / Adendum',                          '996515'),
     ]
 
     hay_datos = False
