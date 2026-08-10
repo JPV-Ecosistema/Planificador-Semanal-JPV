@@ -256,18 +256,20 @@ def sync_from_cloud(filename, filepath):
 
 def load_plan_semanal(ajustador, offset_weeks=0):
     week_id = get_week_identifier(offset_weeks)
-    filename = f"plan_{ajustador.replace(' ', '_')}_{week_id}.json"
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    filename = f"plan_{ajustador_normalizado.replace(' ', '_')}_{week_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
     else:
         data = sync_from_cloud(filename, filepath)
-        return data, filepath 
+        return data, filepath
 
 def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
     month_id = explicit_month_id if explicit_month_id else get_month_identifier(offset_months)
-    filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}_{month_id}.json"
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    filename = f"plan_mensual_mcl_{ajustador_normalizado.replace(' ', '_')}_{month_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
