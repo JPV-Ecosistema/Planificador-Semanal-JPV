@@ -2548,6 +2548,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     import pandas as pd
     from docx import Document
     from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
@@ -2603,6 +2604,52 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
     df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
+
+    secciones = [
+        ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
+        ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
+        ('Rechazo',            '4. Cartas de Cobertura (Rechazo)',                               '8B0000'),
+        ('AnalisisPerdidas',   '5. Cartas de Análisis de Pérdidas',                              'B9770E'),
+        ('Intermedio',         '6. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '7. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '8. Respuestas a Impugnación / Adendum',                           '996515'),
+    ]
+
+    # --- CUADRO RESUMEN (conteo por clasificación, al inicio del reporte) ---
+    doc.add_heading('Resumen de Entregables', level=1)
+    resumen_cols = ['Clasificación', 'Entregados', 'No Entregados', 'Total']
+    table_resumen = doc.add_table(rows=1, cols=len(resumen_cols))
+    table_resumen.style = 'Table Grid'
+    hdr_resumen = table_resumen.rows[0].cells
+    for i, col_name in enumerate(resumen_cols):
+        hdr_resumen[i].text = col_name
+        run = hdr_resumen[i].paragraphs[0].runs[0]
+        run.font.bold = True
+        run.font.color.rgb = RGBColor(255, 255, 255)
+        run.font.size = Pt(9)
+        shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+        hdr_resumen[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+    for tipo, titulo_seccion, _color in secciones:
+        df_tipo_resumen = df_informes[df_informes['tipo_informe'] == tipo]
+        df_tipo_resumen = (
+            df_tipo_resumen.sort_values('estado_cumplimiento', ascending=False)
+                           .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
+        )
+        n_entregados = int((df_tipo_resumen['estado_cumplimiento'] == 'Realizado').sum())
+        n_no_entregados = int((df_tipo_resumen['estado_cumplimiento'] != 'Realizado').sum())
+
+        row_cells = table_resumen.add_row().cells
+        row_cells[0].text = titulo_seccion.split('. ', 1)[-1]
+        row_cells[1].text = str(n_entregados)
+        row_cells[2].text = str(n_no_entregados)
+        row_cells[3].text = str(n_entregados + n_no_entregados)
+        for j in range(len(resumen_cols)):
+            if row_cells[j].paragraphs[0].runs:
+                row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+            if j > 0:
+                row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph('')
 
     columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Honorarios (UF)']
 
@@ -2730,16 +2777,6 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     else:
         doc.add_paragraph('No se registraron casos nuevos en este período.')
     doc.add_paragraph('')
-
-    secciones = [
-        ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
-        ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
-        ('Rechazo',            '4. Cartas de Cobertura (Rechazo)',                               '8B0000'),
-        ('AnalisisPerdidas',   '5. Cartas de Análisis de Pérdidas',                              'B9770E'),
-        ('Intermedio',         '6. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '7. Informes Preliminares',                                       '217346'),
-        ('ImpugnacionAdendum', '8. Respuestas a Impugnación / Adendum',                           '996515'),
-    ]
 
     hay_datos = False
     for tipo, titulo_seccion, color in secciones:
