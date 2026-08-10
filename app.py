@@ -1309,11 +1309,11 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     # --- 1. RESUMEN EJECUTIVO FINANCIERO ---
     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #003366;"><h4>💰 Cuadrante 1: Valorización de Cartera y Facturación Proyectada</h4></div>', unsafe_allow_html=True)
     cond_facturable = df_realizados['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-    
-    uf_facturables_caja = df_realizados[cond_facturable]['honorarios_estimados'].sum()
-    
+
+    uf_facturables_caja = df_realizados[cond_facturable].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
+
     cond_wip = (df_realizados['categoria'] == 'Operativa') & (~cond_facturable)
-    uf_traccionadas_wip = df_realizados[cond_wip]['honorarios_estimados'].sum()
+    uf_traccionadas_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
     
     c_fin1, c_fin2 = st.columns(2)
     with c_fin1:
@@ -1773,10 +1773,10 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
             df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
 
             cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-            uf_caja_aj = df_aj_realizado[cond_fac_aj]['honorarios_estimados'].sum()
+            uf_caja_aj = df_aj_realizado[cond_fac_aj].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
 
             cond_wip_aj = (df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)
-            uf_wip_aj = df_aj_realizado[cond_wip_aj]['honorarios_estimados'].sum()
+            uf_wip_aj = df_aj_realizado[cond_wip_aj].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
 
             t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
             t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
@@ -3097,10 +3097,12 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             header(sl, '💰 Resultado Financiero de la Semana', C_NAVY)
             footer(sl, 2, TOTAL, meta)
             cond_fac = df_aj_real['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \\(Rechazo\\)', case=False, na=False) if not df_aj_real.empty else pd.Series(dtype=bool)
-            uf_caja  = df_aj_real[cond_fac]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
+            df_ifl_dedup = df_aj_real[cond_fac].drop_duplicates(subset=['Ajustador', 'numero_caso']) if not df_aj_real.empty else pd.DataFrame()
+            uf_caja  = df_ifl_dedup['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
             cond_wip = ((df_aj_real['categoria'] == 'Operativa') & (~cond_fac)) if not df_aj_real.empty else pd.Series(dtype=bool)
-            uf_wip   = df_aj_real[cond_wip]['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
-            n_ifl    = int(cond_fac.sum()) if not df_aj_real.empty else 0
+            df_wip_dedup = df_aj_real[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso']) if not df_aj_real.empty else pd.DataFrame()
+            uf_wip   = df_wip_dedup['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
+            n_ifl    = len(df_ifl_dedup) if not df_aj_real.empty else 0
 
             # Panel CAJA (izquierda)
             rect(sl, 0.3, 0.75, 6.3, 6.2, fill=C_STEEL)
@@ -3110,7 +3112,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, 'Unidades de Fomento', 0.55, 2.32, 5.8, 0.25, size=9, color=C_SUB)
             txt(sl, f'{n_ifl} informe(s) cerrado(s)', 0.55, 2.62, 5.8, 0.25, size=9, color=C_MID)
             # Tabla IFL ordenada mayor a menor
-            df_ifl = df_aj_real[cond_fac].copy() if not df_aj_real.empty else pd.DataFrame()
+            df_ifl = df_ifl_dedup.copy() if not df_aj_real.empty else pd.DataFrame()
             if not df_ifl.empty:
                 df_ifl = df_ifl.sort_values('honorarios_estimados', ascending=False)
                 rows_ifl = [(str(r.get('numero_caso', '')), get_nick(r), str(r.get('asegurado', ''))[:28], f"{float(r.get('honorarios_estimados', 0)):,.2f}") for _, r in df_ifl.iterrows()]
@@ -3128,7 +3130,7 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             txt(sl, f'{uf_wip:,.2f}', 6.95, 1.28, 6.0, 1.1, size=44, bold=False, color=C_GOLD)
             txt(sl, 'Unidades de Fomento', 7.05, 2.32, 5.8, 0.25, size=9, color=C_SUB)
             # Tabla WIP: TOP 3 + Otros
-            df_wip_d = df_aj_real[cond_wip].copy() if not df_aj_real.empty else pd.DataFrame()
+            df_wip_d = df_wip_dedup.copy() if not df_aj_real.empty else pd.DataFrame()
             if not df_wip_d.empty:
                 df_wip_d = df_wip_d.sort_values('honorarios_estimados', ascending=False)
                 rows_wip = [(str(r.get('numero_caso', '')), get_nick(r), str(r.get('asegurado', ''))[:28], f"{float(r.get('honorarios_estimados', 0)):,.2f}") for _, r in df_wip_d.head(3).iterrows()]
