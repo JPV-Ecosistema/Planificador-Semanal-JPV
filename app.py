@@ -365,18 +365,20 @@ def vista_planificador(modo="Semanal"):
     
     # --- CANDADO TEMPORAL INTELIGENTE (VENTANA DE COMPROMISO) ---
     es_adicional = False
+    fecha_default_planificacion = ahora_chile.date()
     if modo == "Semanal":
         target_date = ahora_chile + timedelta(weeks=offset_weeks)
         lunes_target = target_date.date() - timedelta(days=target_date.weekday())
         viernes_prev = lunes_target - timedelta(days=3)
-        
+        fecha_default_planificacion = lunes_target
+
         # Lógica de Feriados: Si el lunes es feriado, el cierre se corre al martes
         dia_cierre_oficial = lunes_target
         while dia_cierre_oficial in feriados_cl:
             dia_cierre_oficial += timedelta(days=1)
-            
+
         nombre_dia_cierre = "Lunes" if dia_cierre_oficial == lunes_target else "Martes (extendido por feriado)"
-        
+
         # El candado evalúa la hora local y respeta la extensión si hubo festivo
         if not (viernes_prev <= hoy_dt <= dia_cierre_oficial):
             es_adicional = True
@@ -638,7 +640,7 @@ def vista_planificador(modo="Semanal"):
                                         elif sub_accion:
                                             accion_final = f"{cat_accion} - {sub_accion}"
                             with colC:
-                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fecha_{idx}_{i}")
+                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(fecha_default_planificacion, fecha_default_planificacion), key=f"fecha_{idx}_{i}")
                             
                             if accion_final.strip():
                                 act_dates = []
