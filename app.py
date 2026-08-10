@@ -2518,7 +2518,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 # BLOQUE 4.6: REPORTE DE ENTREGABLES SEMANA PASADA (WORD)
 # VERSIÓN: 1.0.0
 # ---------------------------------------------------------
-def generar_reporte_entregables_word(df_week, week_id_obj):
+def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=None):
     import io
     import os
     import json
@@ -2528,8 +2528,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
-    # Carga silenciosa de Base Maestra para rescatar Corredora y Aseguradora
+    # Carga silenciosa de Base Maestra para rescatar Corredora, Aseguradora y Fecha de Creación
     dict_maestro = {}
+    df_bm = pd.DataFrame()
     filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
     if os.path.exists(filepath_bm):
         try:
@@ -2546,9 +2547,13 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
         except Exception:
             pass
 
+    es_semana_futura = week_id_obj not in ('Semana Pasada',)
+    subtitulo_reporte = 'Entregables Planificados' if es_semana_futura else 'Entregables Ejecutados'
+
     doc = Document()
     agregar_logo_word(doc)
     doc.add_heading(f'Reporte de Entregables - {week_id_obj}', 0)
+    doc.add_paragraph(subtitulo_reporte).runs[0].font.italic = True
 
     # Filtrar solo tareas operativas con acción definida
     df_informes = df_week[df_week['categoria'] == 'Operativa'].copy()
@@ -2617,13 +2622,81 @@ def generar_reporte_entregables_word(df_week, week_id_obj):
                 if row_cells[j].paragraphs[0].runs:
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
 
+    # --- SECCIÓN: CASOS NUEVOS DE LA SEMANA (por Fecha de Creación en Base Maestra) ---
+    def parsear_fecha_creacion(val):
+        try:
+            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                return None
+            s = str(val).strip()
+            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                serial = int(float(s))
+                if 30000 < serial < 60000:  # rango razonable de fechas Excel
+                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+            return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
+        except Exception:
+            return None
+
+    df_casos_nuevos = pd.DataFrame()
+    if not df_bm.empty and dias_semana_target:
+        col_caso_n = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+        col_nick_n = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
+        col_corr_n = 'Corredora' if 'Corredora' in df_bm.columns else df_bm.columns[7]
+        col_aj_n   = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
+        col_aseg_n = 'Asegurado' if 'Asegurado' in df_bm.columns else df_bm.columns[11]
+        col_creado = 'Creado en' if 'Creado en' in df_bm.columns else (df_bm.columns[20] if len(df_bm.columns) > 20 else None)
+
+        if col_creado is not None:
+            df_bm_n = df_bm.copy()
+            df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
+            fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
+            df_casos_nuevos = df_bm_n[
+                df_bm_n['_fecha_creacion'].notna() &
+                (df_bm_n['_fecha_creacion'] >= fecha_ini) &
+                (df_bm_n['_fecha_creacion'] <= fecha_fin)
+            ].copy()
+
+    doc.add_heading('1. Casos Nuevos de la Semana', level=1)
+    if not df_casos_nuevos.empty:
+        headers_cn = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Fecha de Creación']
+        table_cn = doc.add_table(rows=1, cols=len(headers_cn))
+        table_cn.style = 'Table Grid'
+        hdr_cells = table_cn.rows[0].cells
+        for i, col_name in enumerate(headers_cn):
+            hdr_cells[i].text = col_name
+            run = hdr_cells[i].paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(9)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="6C3483"/>'.format(nsdecls('w')))
+            hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        for _, row in df_casos_nuevos.sort_values('_fecha_creacion').iterrows():
+            row_cells = table_cn.add_row().cells
+            row_cells[0].text = str(row.get(col_aj_n, ''))
+            run_aj = row_cells[0].paragraphs[0].runs[0]
+            run_aj.font.bold = True
+            run_aj.font.color.rgb = RGBColor(0, 51, 102)
+            run_aj.font.size = Pt(9)
+            row_cells[1].text = str(row.get(col_caso_n, ''))
+            row_cells[2].text = str(row.get(col_nick_n, ''))
+            row_cells[3].text = str(row.get(col_aseg_n, ''))
+            row_cells[4].text = str(row.get(col_corr_n, ''))
+            fecha_c = row.get('_fecha_creacion')
+            row_cells[5].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+            for j in range(1, len(headers_cn)):
+                if row_cells[j].paragraphs[0].runs:
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+    else:
+        doc.add_paragraph('No se registraron casos nuevos en este período.')
+    doc.add_paragraph('')
+
     secciones = [
-        ('ActaInspeccion',     '1. Actas de Inspección',                                        '5B2C6F'),
-        ('IFL',                '2. Informes Finales de Liquidación',                            '003366'),
-        ('RechazoCobertura',   '3. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',        '8B0000'),
-        ('Intermedio',         '4. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '5. Informes Preliminares',                                       '217346'),
-        ('ImpugnacionAdendum', '6. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
+        ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
+        ('RechazoCobertura',   '4. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',        '8B0000'),
+        ('Intermedio',         '5. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '6. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '7. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
     hay_datos = False
@@ -3421,14 +3494,18 @@ def vista_reportes():
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
-    # --- REPORTE EXCLUSIVO SEMANA PASADA: ENTREGABLES POR TIPO Y ESTADO ---
-    if week_id_obj == "Semana Pasada":
+    # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
+    if week_id_obj in ("Semana Actual", "Semana Pasada"):
         st.markdown("---")
-        st.markdown("### 📄 Reporte de Entregables (Semana Pasada)")
-        st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+        if week_id_obj == "Semana Pasada":
+            st.markdown("### 📄 Reporte de Entregables Ejecutados (Semana Pasada)")
+            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+        else:
+            st.markdown("### 📄 Reporte de Entregables Planificados (Semana Actual)")
+            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
         if st.button("📥 Generar Reporte de Entregables (WORD)", type="primary", use_container_width=True):
             try:
-                word_bytes = generar_reporte_entregables_word(df_week, week_id_obj)
+                word_bytes = generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target)
                 st.download_button(
                     label="⬇️ Descargar Reporte de Entregables",
                     data=word_bytes,
