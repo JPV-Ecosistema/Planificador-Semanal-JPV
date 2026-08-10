@@ -625,7 +625,7 @@ def vista_planificador(modo="Semanal"):
                             default_sub_idx = opts_sub.index(subestado_actual) if subestado_actual in opts_sub else 0
                             subestado_proyectado = st.selectbox(f"Proyectar Sub-estado Final:", opts_sub, index=default_sub_idx, key=f"sub_proj_{idx}")
 
-                        num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=3, key=f"num_act_{idx}")
+                        num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=1, key=f"num_act_{idx}")
                         
                         for i in range(1, int(num_actividades) + 1):
                             colA, colB, colC = st.columns([2, 2, 1])
