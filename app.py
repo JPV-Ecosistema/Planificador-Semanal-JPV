@@ -30,7 +30,9 @@ def init_system():
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
 def get_week_identifier(offset_weeks=0):
-    target_date = datetime.now() + timedelta(weeks=offset_weeks)
+    import pytz
+    ahora_chile = datetime.now(pytz.timezone('America/Santiago'))
+    target_date = ahora_chile + timedelta(weeks=offset_weeks)
     return target_date.strftime("%Y_W%W")
 
 def apply_custom_styles():
@@ -228,7 +230,8 @@ def calcular_tramo_mcl(fila):
     return tramo_str, is_mcl
 
 def get_month_identifier(offset_months=0):
-    now = datetime.now()
+    import pytz
+    now = datetime.now(pytz.timezone('America/Santiago'))
     year = now.year
     month = now.month + offset_months
     while month > 12:
@@ -253,18 +256,20 @@ def sync_from_cloud(filename, filepath):
 
 def load_plan_semanal(ajustador, offset_weeks=0):
     week_id = get_week_identifier(offset_weeks)
-    filename = f"plan_{ajustador.replace(' ', '_')}_{week_id}.json"
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    filename = f"plan_{ajustador_normalizado.replace(' ', '_')}_{week_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f), filepath
     else:
         data = sync_from_cloud(filename, filepath)
-        return data, filepath 
+        return data, filepath
 
 def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
     month_id = explicit_month_id if explicit_month_id else get_month_identifier(offset_months)
-    filename = f"plan_mensual_mcl_{ajustador.replace(' ', '_')}_{month_id}.json"
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    filename = f"plan_mensual_mcl_{ajustador_normalizado.replace(' ', '_')}_{month_id}.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -2584,8 +2589,10 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             return 'ActaInspeccion'
         elif 'informe final de liquidación' in a:
             return 'IFL'
-        elif 'carta de cobertura (rechazo)' in a or 'carta de análisis de pérdidas' in a:
-            return 'RechazoCobertura'
+        elif 'carta de cobertura (rechazo)' in a:
+            return 'Rechazo'
+        elif 'carta de análisis de pérdidas' in a:
+            return 'AnalisisPerdidas'
         elif 'informe intermedio' in a:
             return 'Intermedio'
         elif 'preliminar' in a:
@@ -2727,10 +2734,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     secciones = [
         ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
         ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
-        ('RechazoCobertura',   '4. Cartas de Rechazo / Análisis de Cobertura (Pérdidas)',        '8B0000'),
-        ('Intermedio',         '5. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '6. Informes Preliminares',                                       '217346'),
-        ('ImpugnacionAdendum', '7. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('Rechazo',            '4. Cartas de Cobertura (Rechazo)',                               '8B0000'),
+        ('AnalisisPerdidas',   '5. Cartas de Análisis de Pérdidas',                              'B9770E'),
+        ('Intermedio',         '6. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '7. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '8. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
     hay_datos = False
