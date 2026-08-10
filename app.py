@@ -3126,6 +3126,27 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         plt.close(fig); buf.seek(0)
         return buf
 
+    def pie_planificado_img(pct_plan, pct_no_plan, title):
+        fig, ax = plt.subplots(figsize=(5.0, 3.1))
+        fig.patch.set_facecolor('#EEF2F7')
+        if pct_plan + pct_no_plan > 0:
+            sizes = [pct_plan, pct_no_plan]
+            labels = [f'Planificado\n{pct_plan:.1f}%', f'No Planificado\n{pct_no_plan:.1f}%']
+            colors = ['#28A745', '#D9534F']
+        else:
+            sizes, labels, colors = [1], ['Sin datos'], ['#CCCCCC']
+        ax.pie(
+            sizes, labels=labels, colors=colors, startangle=90,
+            textprops={'fontsize': 10, 'fontweight': 'bold', 'color': '#1A2635'},
+            wedgeprops={'edgecolor': '#EEF2F7', 'linewidth': 2}
+        )
+        ax.set_title(title, fontsize=14, color='#003366', fontweight='bold', pad=12)
+        ax.axis('equal')
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#EEF2F7')
+        plt.close(fig); buf.seek(0)
+        return buf
+
     # FIX 3: cap MAX_ROWS para evitar desborde de tabla fuera de la slide
     def truncar_rows(rows, max_r=MAX_ROWS):
         if len(rows) <= max_r:
@@ -3276,22 +3297,23 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             t_np          = len(df_aj_real[df_aj_real['tipo_actividad'] == 'Actividad Adicional']) if not df_aj_real.empty else 0
             adh      = (t_prog_hechas / t_prog * 100) if t_prog > 0 else 0
             total_h  = t_prog_hechas + t_np
-            rat_pro  = (t_prog_hechas / total_h * 100) if total_h > 0 else 0
+            pct_plan    = (t_prog_hechas / total_h * 100) if total_h > 0 else 0
+            pct_no_plan = (t_np / total_h * 100) if total_h > 0 else 0
             pill(sl, 'TAREAS PROG.',  t_prog,        'planificadas',   0.4,  0.73, val_color=C_NAVY)
             pill(sl, 'REALIZADAS',    t_prog_hechas, 'ejecutadas',     3.55, 0.73, val_color=C_GREEN)
             pill(sl, 'NO REALIZADAS', t_no_real,     'pendientes',     6.7,  0.73, val_color=C_CORAL)
             pill(sl, 'ADICIONALES',   t_np,          'no programadas', 9.85, 0.73, val_color=C_NAVY)
             # FIX 1: pasar solo width para respetar proporción del velocímetro
             try:
-                sl.shapes.add_picture(gauge_img(adh,    'Adherencia al Plan'), Inches(0.55), Inches(2.05), width=Inches(5.9))
-                sl.shapes.add_picture(gauge_img(rat_pro,'Ratio Proactivo'),    Inches(6.9),  Inches(2.05), width=Inches(5.9))
+                sl.shapes.add_picture(gauge_img(adh, 'Adherencia al Plan'), Inches(0.55), Inches(2.05), width=Inches(5.9))
+                sl.shapes.add_picture(pie_planificado_img(pct_plan, pct_no_plan, 'Planificado vs No Planificado'), Inches(6.9), Inches(2.05), width=Inches(5.9))
             except Exception:
                 txt(sl, f'Adherencia: {adh:.1f}%',        0.7, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
-                txt(sl, f'Ratio Proactivo: {rat_pro:.1f}%', 7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
-            # Leyendas bajo los velocímetros
+                txt(sl, f'Planificado: {pct_plan:.1f}%',   7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+            # Leyendas bajo los gráficos
             txt(sl, 'Porcentaje de tareas del plan semanal marcadas como realizadas sobre el total de tareas comprometidas. Meta: ≥ 80%.',
                 0.35, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
-            txt(sl, 'Proporción de actividades adicionales ejecutadas respecto al total de gestiones realizadas en la semana. Refleja la capacidad de respuesta ante imprevistos.',
+            txt(sl, 'De las gestiones realizadas esta semana, qué proporción estaba planificada (verde) y cuál fue trabajo adicional no programado (rojo).',
                 6.7, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
 
             # ── Slide 4: Ejecución del plan programado (una fila por caso+acción con % cumplimiento) ──
