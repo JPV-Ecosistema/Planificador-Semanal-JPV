@@ -3306,15 +3306,15 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             # FIX 1: pasar solo width para respetar proporción del velocímetro
             try:
                 sl.shapes.add_picture(gauge_img(adh, 'Adherencia al Plan'), Inches(0.55), Inches(2.05), width=Inches(5.9))
-                sl.shapes.add_picture(pie_planificado_img(pct_plan, pct_no_plan, 'Planificado vs No Planificado'), Inches(6.9), Inches(2.05), width=Inches(5.9))
+                sl.shapes.add_picture(pie_planificado_img(pct_plan, pct_no_plan, 'Planificado vs No Planificado'), Inches(7.6), Inches(2.05), width=Inches(4.5))
             except Exception:
                 txt(sl, f'Adherencia: {adh:.1f}%',        0.7, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
                 txt(sl, f'Planificado: {pct_plan:.1f}%',   7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
             # Leyendas bajo los gráficos
             txt(sl, 'Porcentaje de tareas del plan semanal marcadas como realizadas sobre el total de tareas comprometidas. Meta: ≥ 80%.',
-                0.35, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
+                0.35, 5.55, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
             txt(sl, 'De las gestiones realizadas esta semana, qué proporción estaba planificada (verde) y cuál fue trabajo adicional no programado (rojo).',
-                6.7, 5.35, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
+                6.7, 5.55, 6.1, 0.7, size=8.5, bold=True, color=C_MID, align=PP_ALIGN.CENTER)
 
             # ── Slide 4: Ejecución del plan programado (una fila por caso+acción con % cumplimiento) ──
             sl = blank(prs)
