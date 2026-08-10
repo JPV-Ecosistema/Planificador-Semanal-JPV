@@ -30,7 +30,9 @@ def init_system():
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
 def get_week_identifier(offset_weeks=0):
-    target_date = datetime.now() + timedelta(weeks=offset_weeks)
+    import pytz
+    ahora_chile = datetime.now(pytz.timezone('America/Santiago'))
+    target_date = ahora_chile + timedelta(weeks=offset_weeks)
     return target_date.strftime("%Y_W%W")
 
 def apply_custom_styles():
@@ -228,7 +230,8 @@ def calcular_tramo_mcl(fila):
     return tramo_str, is_mcl
 
 def get_month_identifier(offset_months=0):
-    now = datetime.now()
+    import pytz
+    now = datetime.now(pytz.timezone('America/Santiago'))
     year = now.year
     month = now.month + offset_months
     while month > 12:
