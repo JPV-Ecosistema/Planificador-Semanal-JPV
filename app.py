@@ -2632,7 +2632,15 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 serial = int(float(s))
                 if 30000 < serial < 60000:  # rango razonable de fechas Excel
                     return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
+            # La Base Maestra guarda "Creado en" como texto AAAA-MM-DD HH:MM:SS
+            # (sin ambigüedad): NO usar dayfirst aquí o mes y día quedan invertidos
+            # (ej. "2026-08-07" se leería como 7 de agosto pero con dayfirst=True
+            # se interpreta como 8 de julio).
+            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                parsed = pd.to_datetime(s, errors='coerce')
+            else:
+                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
+            return parsed.date() if pd.notna(parsed) else None
         except Exception:
             return None
 
