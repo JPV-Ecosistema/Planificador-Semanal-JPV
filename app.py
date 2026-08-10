@@ -2724,8 +2724,16 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         hay_datos = True
         doc.add_heading(titulo_seccion, level=1)
 
-        df_entregados    = df_tipo[df_tipo['estado_cumplimiento'] == 'Realizado']
-        df_no_entregados = df_tipo[df_tipo['estado_cumplimiento'] != 'Realizado']
+        # Un mismo caso+acción puede tener varias filas (ej. rango de fechas de
+        # varios días); si alguna quedó "Realizado", el caso cuenta como entregado
+        # y no debe aparecer también como No Entregado.
+        df_tipo_dedup = (
+            df_tipo.sort_values('estado_cumplimiento', ascending=False)
+                   .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
+        )
+
+        df_entregados    = df_tipo_dedup[df_tipo_dedup['estado_cumplimiento'] == 'Realizado']
+        df_no_entregados = df_tipo_dedup[df_tipo_dedup['estado_cumplimiento'] != 'Realizado']
 
         doc.add_heading(f'Entregados ({len(df_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
         if not df_entregados.empty:
