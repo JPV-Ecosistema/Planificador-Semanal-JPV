@@ -420,7 +420,33 @@ def vista_planificador(modo="Semanal"):
         
         if ajustador_seleccionado:
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
-            
+
+            # --- ALERTA: HITOS DEL PLAN MENSUAL CON FECHA OBJETIVO VENCIDA ---
+            # Un hito solo aparece para comprometerse en la semana exacta de su fecha
+            # objetivo; si esa semana pasa sin incorporarlo, queda "dormido" sin aviso.
+            # Revisamos el mes actual y el anterior para detectar estos casos.
+            hitos_vencidos = []
+            for _off in (0, -1):
+                _plan_mes, _ = load_plan_mensual(ajustador_seleccionado, offset_months=_off)
+                for t in _plan_mes:
+                    if t.get('agendado_semana'):
+                        continue
+                    try:
+                        fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+                    except Exception:
+                        continue
+                    if fec_obj < hoy_dt:
+                        hitos_vencidos.append((t, fec_obj))
+
+            if hitos_vencidos:
+                hitos_vencidos.sort(key=lambda x: x[1])
+                with st.container():
+                    st.error(f"🚨 **{len(hitos_vencidos)} hito(s) del Plan Mensual con fecha objetivo vencida** — nunca se incorporaron a ninguna semana:")
+                    for t, fec_obj in hitos_vencidos:
+                        dias_atraso = (hoy_dt - fec_obj).days
+                        st.markdown(f"- **[{t.get('numero_caso','')}]** {t.get('asegurado','')} — *{t.get('accion','')}* — objetivo {fec_obj.strftime('%d/%m/%Y')} ({dias_atraso} día(s) de atraso)")
+                    st.caption("Edítalos desde el Plan Mensual con una nueva fecha para que vuelvan a aparecer en la semana que corresponda.")
+
             if modo == "Mensual":
                 st.info(f"📅 Planificación mensual ({mes_opcion}): Todos los casos vigentes disponibles.")
             else:
