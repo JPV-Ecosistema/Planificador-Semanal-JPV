@@ -367,7 +367,22 @@ def vista_planificador(modo="Semanal"):
         "Preparar Informe": ["Acta de Inspección", "Preliminar Extendido", "Preliminar Corto", "Carta de Análisis de Pérdidas", "Carta de Cobertura (Rechazo)", "Informe Intermedio 1", "Informe Intermedio 2", "Informe Intermedio 3", "Informe Intermedio 4", "Informe Intermedio 5", "Informe Intermedio", "Informe Final de Liquidación", "Respuesta a Impugnación", "Ademdum", "Otro / Manual"],
         "Otra Acción (Manual)": ["Describir manualmente"]
     }
-    
+
+    # Catálogo simplificado para el Plan Mensual: solo hitos/objetivos (sin el detalle
+    # granular de ajustes, correos e inspecciones que sí aplica semana a semana).
+    HITOS_MENSUALES = [
+        ("Ajuste", "En Ajuste - Revisión de cobertura"),
+        ("Análisis de Antecedentes", "En Ajuste - Revisión de antecedentes"),
+        ("Acta de Inspección", "Preparar Informe - Acta de Inspección"),
+        ("Preliminar", "Preparar Informe - Preliminar"),
+        ("Informe Intermedio", "Preparar Informe - Informe Intermedio"),
+        ("Informe Final de Liquidación", "Preparar Informe - Informe Final de Liquidación"),
+        ("Carta de Cobertura (Rechazo)", "Preparar Informe - Carta de Cobertura (Rechazo)"),
+        ("Carta de Análisis de Pérdidas", "Preparar Informe - Carta de Análisis de Pérdidas"),
+        ("Respuesta a Impugnación", "Preparar Informe - Respuesta a Impugnación"),
+        ("Ademdum", "Preparar Informe - Ademdum"),
+    ]
+
     # --- CANDADO TEMPORAL INTELIGENTE (VENTANA DE COMPROMISO) ---
     es_adicional = False
     fecha_default_planificacion = ahora_chile.date()
@@ -630,63 +645,18 @@ def vista_planificador(modo="Semanal"):
                             default_sub_idx = opts_sub.index(subestado_actual) if subestado_actual in opts_sub else 0
                             subestado_proyectado = st.selectbox(f"Proyectar Sub-estado Final:", opts_sub, index=default_sub_idx, key=f"sub_proj_{idx}")
 
-                        num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=1, key=f"num_act_{idx}")
-                        
-                        for i in range(1, int(num_actividades) + 1):
-                            colA, colB, colC = st.columns([2, 2, 1])
-                            with colA:
-                                cat_accion = st.selectbox(f"Categoría Acción {i}:", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
-                            with colB:
-                                accion_final = ""
-                                if cat_accion:
-                                    if cat_accion == "Otra Acción (Manual)":
-                                        accion_final = st.text_input(f"Describa la acción {i}:", key=f"man_{idx}_{i}")
-                                    else:
-                                        sub_accion = st.selectbox(f"Detalle Acción {i}:", [""] + CATALOGO_ACCIONES[cat_accion], key=f"sub_{idx}_{i}")
-                                        if sub_accion == "Otro / Manual":
-                                            texto_manual = st.text_input(f"Especifique el detalle {i}:", key=f"man_{idx}_{i}")
-                                            if texto_manual: accion_final = f"{cat_accion} - {texto_manual}"
-                                        elif sub_accion:
-                                            accion_final = f"{cat_accion} - {sub_accion}"
-                            with colC:
-                                fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(fecha_default_planificacion, fecha_default_planificacion), key=f"fecha_{idx}_{i}")
-                            
-                            if accion_final.strip():
-                                act_dates = []
-                                if isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 2:
-                                    s_d, e_d = fecha_compromiso_range
-                                    delta = (e_d - s_d).days
-                                    for d in range(delta + 1):
-                                        dt = s_d + timedelta(days=d)
-                                        # Colador de Fines de semana y Feriados
-                                        if dt.weekday() < 5 and dt not in feriados_cl:
-                                            act_dates.append(dt)
-                                elif isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 1:
-                                    act_dates = [fecha_compromiso_range[0]]
-                                else:
-                                    act_dates = [fecha_compromiso_range]
+                        if modo == "Mensual":
+                            num_hitos = st.number_input(f"Cantidad de hitos para el caso {caso_num}:", min_value=1, max_value=6, value=1, key=f"num_hito_{idx}")
 
-                                if not act_dates: act_dates = [s_d if 's_d' in locals() else fecha_compromiso_range]
+                            for i in range(1, int(num_hitos) + 1):
+                                colH, colF = st.columns([2, 1])
+                                with colH:
+                                    hito_label = st.selectbox(f"Hito comprometido {i}:", [""] + [h[0] for h in HITOS_MENSUALES], key=f"hito_{idx}_{i}")
+                                with colF:
+                                    fecha_hito = st.date_input(f"Fecha objetivo {i}:", value=fecha_default_planificacion, key=f"fecha_hito_{idx}_{i}")
 
-                                # --- ALERTA DE DUPLICIDAD CON EL PLAN MENSUAL ---
-                                # Misma acción (categoría + detalle), mismo caso y misma fecha ya presentes
-                                # en el Plan Mensual: probablemente la misma tarea cargada dos veces.
-                                if modo == "Semanal" and mcl_data:
-                                    fechas_dup = set()
-                                    for t in mcl_data:
-                                        if (str(t.get('numero_caso', '')).strip() == str(caso_num).strip()
-                                                and str(t.get('accion', '')).strip() == accion_final.strip()):
-                                            try:
-                                                fec_mensual = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
-                                                if fec_mensual in act_dates:
-                                                    fechas_dup.add(fec_mensual)
-                                            except Exception:
-                                                pass
-                                    if fechas_dup:
-                                        fechas_str = ", ".join(f.strftime("%d/%m") for f in sorted(fechas_dup))
-                                        st.warning(f"⚠️ **Posible duplicación:** la actividad \"{accion_final}\" del caso {caso_num} ya está registrada en el Plan Mensual para el/los día(s) {fechas_str}.")
-
-                                for dt in act_dates:
+                                if hito_label:
+                                    accion_final = dict(HITOS_MENSUALES)[hito_label]
                                     plan_transaccional.append({
                                         "id_transaccion": str(uuid.uuid4()),
                                         "tipo_plan": modo,
@@ -699,11 +669,85 @@ def vista_planificador(modo="Semanal"):
                                         "estado_proyectado": estado_proyectado,
                                         "subestado_proyectado": subestado_proyectado,
                                         "accion": accion_final,
-                                        "fecha_compromiso": dt.strftime("%Y-%m-%d"),
+                                        "fecha_compromiso": fecha_hito.strftime("%Y-%m-%d"),
                                         "estado_cumplimiento": "Pendiente",
                                         "fecha_planificacion": ahora_chile.strftime("%Y-%m-%d %H:%M:%S")
                                     })
-                                
+                        else:
+                            num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=1, key=f"num_act_{idx}")
+
+                            for i in range(1, int(num_actividades) + 1):
+                                colA, colB, colC = st.columns([2, 2, 1])
+                                with colA:
+                                    cat_accion = st.selectbox(f"Categoría Acción {i}:", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
+                                with colB:
+                                    accion_final = ""
+                                    if cat_accion:
+                                        if cat_accion == "Otra Acción (Manual)":
+                                            accion_final = st.text_input(f"Describa la acción {i}:", key=f"man_{idx}_{i}")
+                                        else:
+                                            sub_accion = st.selectbox(f"Detalle Acción {i}:", [""] + CATALOGO_ACCIONES[cat_accion], key=f"sub_{idx}_{i}")
+                                            if sub_accion == "Otro / Manual":
+                                                texto_manual = st.text_input(f"Especifique el detalle {i}:", key=f"man_{idx}_{i}")
+                                                if texto_manual: accion_final = f"{cat_accion} - {texto_manual}"
+                                            elif sub_accion:
+                                                accion_final = f"{cat_accion} - {sub_accion}"
+                                with colC:
+                                    fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(fecha_default_planificacion, fecha_default_planificacion), key=f"fecha_{idx}_{i}")
+
+                                if accion_final.strip():
+                                    act_dates = []
+                                    if isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 2:
+                                        s_d, e_d = fecha_compromiso_range
+                                        delta = (e_d - s_d).days
+                                        for d in range(delta + 1):
+                                            dt = s_d + timedelta(days=d)
+                                            # Colador de Fines de semana y Feriados
+                                            if dt.weekday() < 5 and dt not in feriados_cl:
+                                                act_dates.append(dt)
+                                    elif isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 1:
+                                        act_dates = [fecha_compromiso_range[0]]
+                                    else:
+                                        act_dates = [fecha_compromiso_range]
+
+                                    if not act_dates: act_dates = [s_d if 's_d' in locals() else fecha_compromiso_range]
+
+                                    # --- ALERTA DE DUPLICIDAD CON EL PLAN MENSUAL ---
+                                    # Misma acción (categoría + detalle), mismo caso y misma fecha ya presentes
+                                    # en el Plan Mensual: probablemente la misma tarea cargada dos veces.
+                                    if mcl_data:
+                                        fechas_dup = set()
+                                        for t in mcl_data:
+                                            if (str(t.get('numero_caso', '')).strip() == str(caso_num).strip()
+                                                    and str(t.get('accion', '')).strip() == accion_final.strip()):
+                                                try:
+                                                    fec_mensual = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+                                                    if fec_mensual in act_dates:
+                                                        fechas_dup.add(fec_mensual)
+                                                except Exception:
+                                                    pass
+                                        if fechas_dup:
+                                            fechas_str = ", ".join(f.strftime("%d/%m") for f in sorted(fechas_dup))
+                                            st.warning(f"⚠️ **Posible duplicación:** la actividad \"{accion_final}\" del caso {caso_num} ya está registrada en el Plan Mensual para el/los día(s) {fechas_str}.")
+
+                                    for dt in act_dates:
+                                        plan_transaccional.append({
+                                            "id_transaccion": str(uuid.uuid4()),
+                                            "tipo_plan": modo,
+                                            "tipo_actividad": tipo_actividad_actual,
+                                            "categoria": "Operativa",
+                                            "numero_caso": str(caso_num),
+                                            "asegurado": str(asegurado),
+                                            "tramo_uf": tramo,
+                                            "honorarios_estimados": honorarios_estimados,
+                                            "estado_proyectado": estado_proyectado,
+                                            "subestado_proyectado": subestado_proyectado,
+                                            "accion": accion_final,
+                                            "fecha_compromiso": dt.strftime("%Y-%m-%d"),
+                                            "estado_cumplimiento": "Pendiente",
+                                            "fecha_planificacion": ahora_chile.strftime("%Y-%m-%d %H:%M:%S")
+                                        })
+
             st.markdown("---")
             st.header("3. Acciones de Gestión")
             col1, col2 = st.columns(2)
