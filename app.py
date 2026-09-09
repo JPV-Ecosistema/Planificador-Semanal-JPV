@@ -1083,6 +1083,7 @@ def vista_diario():
             tareas_hoy = []
             tareas_pendientes = []  # atrasadas: fecha de compromiso ya pasó
             tareas_futuras = []     # no vencidas: fecha de compromiso todavía no llega
+            total_hoy_count = 0     # incluye realizadas, para distinguir "sin tareas hoy" de "ya las completó"
             uf_proyectadas_hoy = 0.0
             uf_ejecutadas_hoy = 0.0
             uf_proyectadas_semana = 0.0
@@ -1105,14 +1106,18 @@ def vista_diario():
 
                 fecha_comp_tarea = tarea.get("fecha_compromiso", "")
                 if fecha_comp_tarea == hoy_str:
-                    tareas_hoy.append(tarea_con_indice)
+                    total_hoy_count += 1
                     uf_proyectadas_hoy += uf_tarea
                     if es_realizado:
                         uf_ejecutadas_hoy += uf_tarea
+                    else:
+                        tareas_hoy.append(tarea_con_indice)
                 elif fecha_comp_tarea and fecha_comp_tarea < hoy_str:
-                    tareas_pendientes.append(tarea_con_indice)
+                    if not es_realizado:
+                        tareas_pendientes.append(tarea_con_indice)
                 else:
-                    tareas_futuras.append(tarea_con_indice)
+                    if not es_realizado:
+                        tareas_futuras.append(tarea_con_indice)
             
             total_tareas = len(plan_data)
             tareas_completadas = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
@@ -1173,6 +1178,8 @@ def vista_diario():
                 if tareas_hoy:
                     st.subheader("🔥 1. Prioridad para Hoy (Compromisos del Día)")
                     cambios_realizados = _renderizar_bloque_tareas(tareas_hoy, "hoy", "⚡") or cambios_realizados
+                elif total_hoy_count > 0:
+                    st.success("🎉 Ya completaste todas tus tareas de hoy.")
                 else:
                     st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy.")
 
