@@ -2885,7 +2885,10 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     if not df_sin_preliminar.empty:
         headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación']
 
-        for division in sorted(df_sin_preliminar['_division'].unique()):
+        # Las divisiones se ordenan por su caso más antiguo (no alfabéticamente),
+        # para que la sección se lea de más antiguo a más nuevo de principio a fin.
+        orden_divisiones = df_sin_preliminar.groupby('_division')['_fecha_creacion'].min().sort_values().index.tolist()
+        for division in orden_divisiones:
             df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
             doc.add_heading(f'{division} ({len(df_div)})', level=2)
 
