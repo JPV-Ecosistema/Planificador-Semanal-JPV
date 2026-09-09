@@ -1081,34 +1081,38 @@ def vista_diario():
             
             # --- MOTOR DE CÁLCULO DE HONORARIOS Y TAREAS ---
             tareas_hoy = []
-            tareas_resto = []
+            tareas_pendientes = []  # atrasadas: fecha de compromiso ya pasó
+            tareas_futuras = []     # no vencidas: fecha de compromiso todavía no llega
             uf_proyectadas_hoy = 0.0
             uf_ejecutadas_hoy = 0.0
             uf_proyectadas_semana = 0.0
             uf_ejecutadas_semana = 0.0
-            
+
             for idx, tarea in enumerate(plan_data):
                 tarea_con_indice = tarea.copy()
                 tarea_con_indice['_posicion_original'] = idx
-                
+
                 try:
                     uf_tarea = float(tarea.get("honorarios_estimados", 0.0))
                 except:
                     uf_tarea = 0.0
-                    
+
                 es_realizado = (tarea.get("estado_cumplimiento") == "Realizado")
-                
+
                 uf_proyectadas_semana += uf_tarea
                 if es_realizado:
                     uf_ejecutadas_semana += uf_tarea
-                
-                if tarea.get("fecha_compromiso") == hoy_str:
+
+                fecha_comp_tarea = tarea.get("fecha_compromiso", "")
+                if fecha_comp_tarea == hoy_str:
                     tareas_hoy.append(tarea_con_indice)
                     uf_proyectadas_hoy += uf_tarea
                     if es_realizado:
                         uf_ejecutadas_hoy += uf_tarea
+                elif fecha_comp_tarea and fecha_comp_tarea < hoy_str:
+                    tareas_pendientes.append(tarea_con_indice)
                 else:
-                    tareas_resto.append(tarea_con_indice)
+                    tareas_futuras.append(tarea_con_indice)
             
             total_tareas = len(plan_data)
             tareas_completadas = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
@@ -1123,64 +1127,63 @@ def vista_diario():
             col_met4.metric("UF Ejecutadas Semana", f"{uf_ejecutadas_semana:,.2f}")
             st.markdown("---")
             
+            def _renderizar_bloque_tareas(lista_tareas, prefijo_key, icono_pendiente):
+                """Dibuja un bloque de tareas con checkbox + fecha real de ejecución.
+                Devuelve True si alguna tarea cambió de estado o de fecha real."""
+                cambios = False
+                for t in lista_tareas:
+                    pos = t['_posicion_original']
+                    estado_actual = t.get("estado_cumplimiento", "Pendiente")
+                    es_realizado = (estado_actual == "Realizado")
+                    clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
+                    icono = "✅" if es_realizado else icono_pendiente
+                    tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
+                    uf_txt = f" | 💰 {float(t.get('honorarios_estimados', 0.0)):,.2f} UF"
+
+                    st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
+                    if t["categoria"] == "Operativa":
+                        est_p = t.get('estado_proyectado', 'N/D')
+                        sub_p = t.get('subestado_proyectado', 'N/D')
+                        st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Tramo: {t['tramo_uf']}* | *Proyectado: {est_p} ({sub_p})*{tipo_act}{uf_txt}")
+                    else:
+                        st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*{tipo_act}{uf_txt}")
+                    st.markdown(f"**Entregable:** {t['accion']}")
+
+                    col_chk, col_fec = st.columns([1, 1])
+                    with col_chk:
+                        nuevo_estado = st.checkbox("Marcar como ejecutado", value=es_realizado, key=f"chk_{prefijo_key}_{t['id_transaccion']}")
+                    with col_fec:
+                        fecha_ejec_actual = str(t.get("fecha_ejecucion", "")).strip()
+                        try:
+                            fecha_ejec_default = datetime.strptime(fecha_ejec_actual[:10], "%Y-%m-%d").date()
+                        except Exception:
+                            fecha_ejec_default = ahora_chile_diario.date()
+                        fecha_ejec_input = st.date_input("Fecha real de ejecución", value=fecha_ejec_default, key=f"fecex_{prefijo_key}_{t['id_transaccion']}")
+
+                    nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
+                    nueva_fecha_ejec = fecha_ejec_input.strftime("%Y-%m-%d 00:00:00") if nuevo_estado else ""
+                    if nuevo_texto_estado != estado_actual or (nuevo_estado and nueva_fecha_ejec[:10] != fecha_ejec_actual[:10]):
+                        plan_data[pos]["estado_cumplimiento"] = nuevo_texto_estado
+                        plan_data[pos]["fecha_ejecucion"] = nueva_fecha_ejec
+                        cambios = True
+                    st.markdown('</div>', unsafe_allow_html=True)
+                return cambios
+
             with st.form(key="form_cumplimiento_estructurado"):
                 if tareas_hoy:
-                    st.subheader("🔥 Prioridad para Hoy (Compromisos del Día)")
-                    for t in tareas_hoy:
-                        pos = t['_posicion_original']
-                        estado_actual = t.get("estado_cumplimiento", "Pendiente")
-                        es_realizado = (estado_actual == "Realizado")
-                        clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
-                        icono = "✅" if es_realizado else "⚡"
-                        tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
-                        uf_txt = f" | 💰 {float(t.get('honorarios_estimados', 0.0)):,.2f} UF"
-                        
-                        st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
-                        if t["categoria"] == "Operativa":
-                            est_p = t.get('estado_proyectado', 'N/D')
-                            sub_p = t.get('subestado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Tramo: {t['tramo_uf']}* | *Proyectado: {est_p} ({sub_p})*{tipo_act}{uf_txt}")
-                        else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}**{tipo_act}{uf_txt}")
-                        st.markdown(f"**Entregable:** {t['accion']}")
-                        
-                        nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_hoy_{t['id_transaccion']}")
-                        nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
-                        if nuevo_texto_estado != estado_actual:
-                            plan_data[pos]["estado_cumplimiento"] = nuevo_texto_estado
-                            plan_data[pos]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
-                            cambios_realizados = True
-                        st.markdown('</div>', unsafe_allow_html=True)
+                    st.subheader("🔥 1. Prioridad para Hoy (Compromisos del Día)")
+                    cambios_realizados = _renderizar_bloque_tareas(tareas_hoy, "hoy", "⚡") or cambios_realizados
                 else:
-                    st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy. Abajo se despliega tu planificación extendida.")
+                    st.info("💡 No tienes actividades agendadas específicamente para la fecha de hoy.")
 
-                if tareas_resto:
-                    st.subheader("📅 Resto de la Planificación (Semanal y Mensual)")
-                    for t in tareas_resto:
-                        pos = t['_posicion_original']
-                        estado_actual = t.get("estado_cumplimiento", "Pendiente")
-                        es_realizado = (estado_actual == "Realizado")
-                        clase_css = "tarea-marco tarea-realizada" if es_realizado else "tarea-marco"
-                        icono = "✅" if es_realizado else "⏳"
-                        tipo_act = f" [{t.get('tipo_actividad', 'Programada').upper()}]"
-                        uf_txt = f" | 💰 {float(t.get('honorarios_estimados', 0.0)):,.2f} UF"
-                        
-                        st.markdown(f'<div class="{clase_css}">', unsafe_allow_html=True)
-                        if t["categoria"] == "Operativa":
-                            est_p = t.get('estado_proyectado', 'N/D')
-                            st.markdown(f"**{icono} CASO [{t['numero_caso']}]** - {t['asegurado']} | *Compromiso: {t['fecha_compromiso']}* | *Proyectado: {est_p}*{tipo_act}{uf_txt}")
-                        else:
-                            st.markdown(f"**{icono} {t['categoria'].upper()}** | *Compromiso: {t['fecha_compromiso']}*{tipo_act}{uf_txt}")
-                        st.markdown(f"**Entregable:** {t['accion']}")
-                        
-                        nuevo_estado = st.checkbox(f"Marcar como ejecutado", value=es_realizado, key=f"chk_rest_{t['id_transaccion']}")
-                        nuevo_texto_estado = "Realizado" if nuevo_estado else "Pendiente"
-                        if nuevo_texto_estado != estado_actual:
-                            plan_data[pos]["estado_cumplimiento"] = nuevo_texto_estado
-                            plan_data[pos]["fecha_ejecucion"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nuevo_estado else ""
-                            cambios_realizados = True
-                        st.markdown('</div>', unsafe_allow_html=True)
-                
+                if tareas_pendientes:
+                    st.subheader("🔴 2. Pendientes (Tareas Atrasadas)")
+                    cambios_realizados = _renderizar_bloque_tareas(tareas_pendientes, "pend", "🔴") or cambios_realizados
+
+                if tareas_futuras:
+                    st.subheader("🗓️ 3. Futuras (Tareas No Vencidas)")
+                    cambios_realizados = _renderizar_bloque_tareas(tareas_futuras, "fut", "⏳") or cambios_realizados
+
                 st.markdown('<div class="btn-guardar">', unsafe_allow_html=True)
                 submit_button = st.form_submit_button(label="💾 ACTUALIZAR CUMPLIMIENTO DIARIO")
                 st.markdown('</div>', unsafe_allow_html=True)
