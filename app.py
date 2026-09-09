@@ -2805,7 +2805,8 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             return None
 
     df_casos_nuevos = pd.DataFrame()
-    if not df_bm.empty and dias_semana_target:
+    df_sin_preliminar = pd.DataFrame()
+    if not df_bm.empty:
         col_caso_n = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
         col_div_n  = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
         col_nick_n = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
@@ -2821,13 +2822,23 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         if col_creado is not None:
             df_bm_n = df_bm.copy()
             df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
-            fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
-            df_casos_nuevos = df_bm_n[
-                df_bm_n['_fecha_creacion'].notna() &
-                (df_bm_n['_fecha_creacion'] >= fecha_ini) &
-                (df_bm_n['_fecha_creacion'] <= fecha_fin)
-            ].copy()
-            df_casos_nuevos['_division'] = df_casos_nuevos[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+            df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+
+            if dias_semana_target:
+                fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
+                df_casos_nuevos = df_bm_n[
+                    df_bm_n['_fecha_creacion'].notna() &
+                    (df_bm_n['_fecha_creacion'] >= fecha_ini) &
+                    (df_bm_n['_fecha_creacion'] <= fecha_fin)
+                ].copy()
+
+            # Sin Informe Preliminar: TODOS los casos vigentes (no Cerrados), sin
+            # importar cuándo se crearon, no solo los nuevos de la semana.
+            if col_estado_n is not None and col_preliminar_n is not None:
+                df_sin_preliminar = df_bm_n[
+                    (df_bm_n[col_estado_n].astype(str).str.strip().str.lower() != 'cerrado') &
+                    (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
+                ].copy()
 
     doc.add_heading('1. Casos Nuevos de la Semana', level=1)
     if not df_casos_nuevos.empty:
@@ -2870,16 +2881,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         doc.add_paragraph('No se registraron casos nuevos en este período.')
     doc.add_paragraph('')
 
-    # --- SECCIÓN: CASOS NUEVOS SIN INFORME PRELIMINAR ---
-    # Mismos casos nuevos de la semana, filtrados a los que aún no tienen el
-    # "Informe inicial" (Preliminar) marcado como completado en la Base Maestra.
-    df_sin_preliminar = pd.DataFrame()
-    if not df_casos_nuevos.empty and col_preliminar_n is not None:
-        df_sin_preliminar = df_casos_nuevos[
-            df_casos_nuevos[col_preliminar_n].astype(str).str.strip().str.lower() != 'si'
-        ].copy()
-
-    doc.add_heading('2. Casos Nuevos sin Informe Preliminar', level=1)
+    doc.add_heading('2. Casos sin Informe Preliminar', level=1)
     if not df_sin_preliminar.empty:
         headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación']
 
@@ -2920,7 +2922,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
             doc.add_paragraph('')
     else:
-        doc.add_paragraph('Todos los casos nuevos de este período ya cuentan con Informe Preliminar, o no se registraron casos nuevos.')
+        doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
     doc.add_paragraph('')
 
     hay_datos = False
