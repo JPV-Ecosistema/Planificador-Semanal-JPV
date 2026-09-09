@@ -2694,13 +2694,13 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
 
     secciones = [
-        ('ActaInspeccion',     '2. Actas de Inspección',                                        '5B2C6F'),
-        ('IFL',                '3. Informes Finales de Liquidación',                            '003366'),
-        ('Rechazo',            '4. Cartas de Cobertura (Rechazo)',                               '8B0000'),
-        ('AnalisisPerdidas',   '5. Cartas de Análisis de Pérdidas',                              'B9770E'),
-        ('Intermedio',         '6. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '7. Informes Preliminares',                                       '217346'),
-        ('ImpugnacionAdendum', '8. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('ActaInspeccion',     '3. Actas de Inspección',                                        '5B2C6F'),
+        ('IFL',                '4. Informes Finales de Liquidación',                            '003366'),
+        ('Rechazo',            '5. Cartas de Cobertura (Rechazo)',                               '8B0000'),
+        ('AnalisisPerdidas',   '6. Cartas de Análisis de Pérdidas',                              'B9770E'),
+        ('Intermedio',         '7. Informes Intermedios',                                        '004A99'),
+        ('Preliminar',         '8. Informes Preliminares',                                       '217346'),
+        ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
     # --- CUADRO RESUMEN (conteo por clasificación, al inicio del reporte) ---
@@ -2805,7 +2805,8 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             return None
 
     df_casos_nuevos = pd.DataFrame()
-    if not df_bm.empty and dias_semana_target:
+    df_sin_preliminar = pd.DataFrame()
+    if not df_bm.empty:
         col_caso_n = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
         col_div_n  = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
         col_nick_n = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
@@ -2813,17 +2814,31 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         col_aj_n   = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
         col_aseg_n = 'Asegurado' if 'Asegurado' in df_bm.columns else df_bm.columns[11]
         col_creado = 'Creado en' if 'Creado en' in df_bm.columns else (df_bm.columns[20] if len(df_bm.columns) > 20 else None)
+        col_estado_n     = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+        col_subestado_n  = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
+        col_aseguradora_n = 'Compañía de seguros' if 'Compañía de seguros' in df_bm.columns else (df_bm.columns[6] if len(df_bm.columns) > 6 else None)
+        col_preliminar_n  = 'Informe inicial completado' if 'Informe inicial completado' in df_bm.columns else (df_bm.columns[44] if len(df_bm.columns) > 44 else None)
 
         if col_creado is not None:
             df_bm_n = df_bm.copy()
             df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
-            fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
-            df_casos_nuevos = df_bm_n[
-                df_bm_n['_fecha_creacion'].notna() &
-                (df_bm_n['_fecha_creacion'] >= fecha_ini) &
-                (df_bm_n['_fecha_creacion'] <= fecha_fin)
-            ].copy()
-            df_casos_nuevos['_division'] = df_casos_nuevos[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+            df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+
+            if dias_semana_target:
+                fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
+                df_casos_nuevos = df_bm_n[
+                    df_bm_n['_fecha_creacion'].notna() &
+                    (df_bm_n['_fecha_creacion'] >= fecha_ini) &
+                    (df_bm_n['_fecha_creacion'] <= fecha_fin)
+                ].copy()
+
+            # Sin Informe Preliminar: TODOS los casos vigentes (no Cerrados), sin
+            # importar cuándo se crearon, no solo los nuevos de la semana.
+            if col_estado_n is not None and col_preliminar_n is not None:
+                df_sin_preliminar = df_bm_n[
+                    (df_bm_n[col_estado_n].astype(str).str.strip().str.lower() != 'cerrado') &
+                    (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
+                ].copy()
 
     doc.add_heading('1. Casos Nuevos de la Semana', level=1)
     if not df_casos_nuevos.empty:
@@ -2864,6 +2879,50 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             doc.add_paragraph('')
     else:
         doc.add_paragraph('No se registraron casos nuevos en este período.')
+    doc.add_paragraph('')
+
+    doc.add_heading('2. Casos sin Informe Preliminar', level=1)
+    if not df_sin_preliminar.empty:
+        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación']
+
+        for division in sorted(df_sin_preliminar['_division'].unique()):
+            df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
+            doc.add_heading(f'{division} ({len(df_div)})', level=2)
+
+            table_sp = doc.add_table(rows=1, cols=len(headers_sp))
+            table_sp.style = 'Table Grid'
+            hdr_cells = table_sp.rows[0].cells
+            for i, col_name in enumerate(headers_sp):
+                hdr_cells[i].text = col_name
+                run = hdr_cells[i].paragraphs[0].runs[0]
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(255, 255, 255)
+                run.font.size = Pt(9)
+                shading_elm = parse_xml(r'<w:shd {} w:fill="C0392B"/>'.format(nsdecls('w')))
+                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+            for _, row in df_div.sort_values('_fecha_creacion').iterrows():
+                row_cells = table_sp.add_row().cells
+                row_cells[0].text = str(row.get(col_aj_n, ''))
+                run_aj = row_cells[0].paragraphs[0].runs[0]
+                run_aj.font.bold = True
+                run_aj.font.color.rgb = RGBColor(0, 51, 102)
+                run_aj.font.size = Pt(9)
+                row_cells[1].text = str(row.get(col_caso_n, ''))
+                row_cells[2].text = str(row.get(col_nick_n, ''))
+                row_cells[3].text = str(row.get(col_aseg_n, ''))
+                row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
+                estado_txt = str(row.get(col_estado_n, '')) if col_estado_n else ''
+                subestado_txt = str(row.get(col_subestado_n, '')) if col_subestado_n else ''
+                row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
+                fecha_c = row.get('_fecha_creacion')
+                row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+                for j in range(1, len(headers_sp)):
+                    if row_cells[j].paragraphs[0].runs:
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+            doc.add_paragraph('')
+    else:
+        doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
     doc.add_paragraph('')
 
     hay_datos = False
