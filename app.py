@@ -278,6 +278,19 @@ def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
         data = sync_from_cloud(filename, filepath)
         return data, filepath
 
+def load_plan_mensual_local(ajustador, offset_months=0, explicit_month_id=None):
+    """Igual que load_plan_mensual, pero solo lee el archivo local: nunca llama a
+    Google Sheets. Para usos informativos (ej. alertas) que no deben sumar carga
+    a la cuota de la API."""
+    month_id = explicit_month_id if explicit_month_id else get_month_identifier(offset_months)
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    filename = f"plan_mensual_mcl_{ajustador_normalizado.replace(' ', '_')}_{month_id}.json"
+    filepath = os.path.join(PERSISTENCE_DIR, filename)
+    if os.path.exists(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
 def save_plan_actualizado(filepath, data):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -425,9 +438,11 @@ def vista_planificador(modo="Semanal"):
             # Un hito solo aparece para comprometerse en la semana exacta de su fecha
             # objetivo; si esa semana pasa sin incorporarlo, queda "dormido" sin aviso.
             # Revisamos el mes actual y el anterior para detectar estos casos.
+            # Solo lectura local (load_plan_mensual_local): es un aviso informativo,
+            # no debe sumar llamadas a la cuota de la API de Google Sheets.
             hitos_vencidos = []
             for _off in (0, -1):
-                _plan_mes, _ = load_plan_mensual(ajustador_seleccionado, offset_months=_off)
+                _plan_mes = load_plan_mensual_local(ajustador_seleccionado, offset_months=_off)
                 for t in _plan_mes:
                     if t.get('agendado_semana'):
                         continue
