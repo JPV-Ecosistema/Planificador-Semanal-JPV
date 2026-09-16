@@ -1239,6 +1239,111 @@ def vista_diario():
 
 
 # =========================================================
+# MÓDULO 3.5: PANEL DE ADMINISTRADOR (acceso restringido por contraseña)
+# VERSIÓN: 1.0.0
+# =========================================================
+def vista_admin():
+    st.title("🔐 Panel de Administrador")
+    st.warning("⚠️ Modo Administrador: los cambios que hagas aquí se guardan directamente al plan de cualquier ajustador, sin pasar por su flujo normal de planificación. Úsalo con cuidado.")
+
+    df_maestro = load_master_base()
+    if df_maestro is None or df_maestro.empty:
+        st.info("No se pudo cargar la Base Maestra.")
+        return
+
+    col_ajustador = 'Ajustador senior' if 'Ajustador senior' in df_maestro.columns else df_maestro.columns[9]
+    ajustadores_validos = sorted(df_maestro[col_ajustador].dropna().unique())
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ajustador_admin = st.selectbox("Ajustador:", [""] + ajustadores_validos, key="admin_aj_sel")
+    with col2:
+        tipo_plan_admin = st.radio("Tipo de plan:", ["Semanal", "Mensual"], key="admin_tipo_plan", horizontal=True)
+    with col3:
+        if tipo_plan_admin == "Semanal":
+            periodo_admin = st.radio("Período:", ["Semana Pasada", "Hace 2 Semanas"], key="admin_periodo_sem", horizontal=True)
+            offset = -1 if periodo_admin == "Semana Pasada" else -2
+        else:
+            periodo_admin = st.radio("Período:", ["Mes Actual", "Mes Pasado"], key="admin_periodo_mes", horizontal=True)
+            offset = 0 if periodo_admin == "Mes Actual" else -1
+
+    if not ajustador_admin:
+        st.info("Selecciona un ajustador para ver y editar su plan.")
+        return
+
+    if tipo_plan_admin == "Semanal":
+        plan_data, filepath = load_plan_semanal(ajustador_admin, offset_weeks=offset)
+    else:
+        plan_data, filepath = load_plan_mensual(ajustador_admin, offset_months=offset)
+
+    st.caption(f"Archivo: `{os.path.basename(filepath)}`")
+
+    if not plan_data:
+        st.info(f"{ajustador_admin} no tiene un plan {tipo_plan_admin.lower()} guardado para «{periodo_admin}».")
+        return
+
+    df_full = pd.DataFrame(plan_data).reset_index(drop=True)
+    dcols = [c for c in ['numero_caso', 'asegurado', 'accion', 'fecha_compromiso', 'tipo_actividad', 'estado_cumplimiento', 'fecha_ejecucion'] if c in df_full.columns]
+    df_display = df_full[dcols].copy()
+    if 'fecha_compromiso' in df_display.columns:
+        df_display['fecha_compromiso'] = pd.to_datetime(df_display['fecha_compromiso'], errors='coerce').dt.date
+    if 'fecha_ejecucion' in df_display.columns:
+        df_display['fecha_ejecucion'] = pd.to_datetime(df_display['fecha_ejecucion'], errors='coerce').dt.date
+
+    col_cfg = {
+        'numero_caso':         st.column_config.TextColumn('N° Caso', disabled=True, width='small'),
+        'asegurado':           st.column_config.TextColumn('Asegurado', disabled=True, width='medium'),
+        'accion':              st.column_config.TextColumn('Acción', width='large'),
+        'fecha_compromiso':    st.column_config.DateColumn('Fecha Compromiso', format='DD/MM/YYYY', width='small'),
+        'tipo_actividad':      st.column_config.SelectboxColumn('Tipo', options=['Programada', 'Actividad Adicional'], width='small'),
+        'estado_cumplimiento': st.column_config.SelectboxColumn('Estado', options=['Pendiente', 'Realizado'], width='small'),
+        'fecha_ejecucion':     st.column_config.DateColumn('Fecha Real Ejecución', format='DD/MM/YYYY', width='small'),
+    }
+    col_cfg = {k: v for k, v in col_cfg.items() if k in dcols}
+
+    st.caption("Edita directamente en la tabla. Usa 🗑️ al final de cada fila para eliminarla. Presiona 'Guardar Cambios' para confirmar.")
+    editor_key = f"admin_editor_{ajustador_admin}_{tipo_plan_admin}_{offset}"
+    edited_df = st.data_editor(
+        df_display,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=col_cfg,
+        key=editor_key
+    )
+
+    if st.button("💾 Guardar Cambios (Administrador)", type="primary", key="btn_admin_guardar"):
+        try:
+            plan_modificado = []
+            for orig_idx in edited_df.index:
+                if orig_idx < len(df_full):
+                    task = df_full.loc[orig_idx].to_dict()
+                    row = edited_df.loc[orig_idx]
+                    if 'accion' in row and pd.notna(row['accion']):
+                        task['accion'] = str(row['accion'])
+                    if 'fecha_compromiso' in row and row['fecha_compromiso'] is not None:
+                        try:
+                            task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
+                        except AttributeError:
+                            task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                    if 'tipo_actividad' in row and pd.notna(row.get('tipo_actividad')):
+                        task['tipo_actividad'] = str(row['tipo_actividad'])
+                    if 'estado_cumplimiento' in row and pd.notna(row.get('estado_cumplimiento')):
+                        task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
+                    if 'fecha_ejecucion' in row and row['fecha_ejecucion'] is not None:
+                        try:
+                            task['fecha_ejecucion'] = row['fecha_ejecucion'].strftime('%Y-%m-%d 00:00:00')
+                        except AttributeError:
+                            task['fecha_ejecucion'] = str(row['fecha_ejecucion'])
+                    plan_modificado.append(task)
+            save_plan_actualizado(filepath, plan_modificado)
+            st.success(f"✅ Plan actualizado: {len(plan_modificado)} tarea(s) guardadas.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al guardar: {e}")
+
+
+# =========================================================
 # MÓDULO 4: REPORTE DE JEFATURA (GANTT, DASHBOARD Y OPERACIONAL)
 # VERSIÓN: 4.9.2 (Arquitectura Modular Segura y Blindaje de Variables)
 # =========================================================
@@ -3790,14 +3895,41 @@ def main():
     st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60)
     st.sidebar.title("Navegación OpsControl")
 
+    opciones_menu = ["Planificador Mensual", "Planificador Semanal", "Programa Diario", "Reportes de Gestión"]
+    if st.session_state.get('es_admin'):
+        opciones_menu.append("🔐 Administrador")
+
     opcion = st.sidebar.radio(
         "Ir a:",
-        ["Planificador Mensual", "Planificador Semanal", "Programa Diario", "Reportes de Gestión"]
+        opciones_menu
     )
 
     st.sidebar.markdown("---")
     render_sidebar_base_maestra()
     st.sidebar.markdown("---")
+
+    # --- ACCESO DE ADMINISTRADOR (discreto, restringido por contraseña) ---
+    # No aparece en el menú "Ir a:" hasta que se ingresa la contraseña correcta.
+    with st.sidebar.expander("⚙️", expanded=False):
+        if not st.session_state.get('es_admin'):
+            admin_pwd_input = st.text_input("Acceso administrador", type="password", key="admin_pwd_input")
+            if st.button("Ingresar", key="btn_admin_login"):
+                try:
+                    admin_pwd_secret = st.secrets.get("admin_password")
+                except Exception:
+                    admin_pwd_secret = None
+                if not admin_pwd_secret:
+                    st.error("El acceso de administrador no está configurado (falta 'admin_password' en Secrets).")
+                elif admin_pwd_input == admin_pwd_secret:
+                    st.session_state['es_admin'] = True
+                    st.rerun()
+                else:
+                    st.error("Contraseña incorrecta.")
+        else:
+            st.success("Modo Administrador activo")
+            if st.button("Salir del modo Administrador", key="btn_admin_logout"):
+                st.session_state['es_admin'] = False
+                st.rerun()
 
     if opcion == "Planificador Mensual":
         vista_planificador("Mensual")
@@ -3807,6 +3939,8 @@ def main():
         vista_diario()
     elif opcion == "Reportes de Gestión":
         vista_reportes()
+    elif opcion == "🔐 Administrador":
+        vista_admin()
 
 if __name__ == "__main__":
     main()
