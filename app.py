@@ -444,7 +444,7 @@ def vista_planificador(modo="Semanal"):
             for _off in (0, -1):
                 _plan_mes = load_plan_mensual_local(ajustador_seleccionado, offset_months=_off)
                 for t in _plan_mes:
-                    if t.get('agendado_semana'):
+                    if t.get('agendado_semana') or t.get('estado_cumplimiento') == 'Realizado':
                         continue
                     try:
                         fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
