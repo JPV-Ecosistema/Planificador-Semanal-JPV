@@ -718,7 +718,7 @@ def vista_planificador(modo="Semanal"):
                             num_actividades = st.number_input(f"Cantidad de actividades para el caso {caso_num}:", min_value=1, max_value=15, value=1, key=f"num_act_{idx}")
 
                             for i in range(1, int(num_actividades) + 1):
-                                colA, colB, colC = st.columns([2, 2, 1])
+                                colA, colB, colC1, colC2 = st.columns([2, 2, 1, 1])
                                 with colA:
                                     cat_accion = st.selectbox(f"Categoría Acción {i}:", [""] + list(CATALOGO_ACCIONES.keys()), key=f"cat_{idx}_{i}")
                                 with colB:
@@ -733,25 +733,24 @@ def vista_planificador(modo="Semanal"):
                                                 if texto_manual: accion_final = f"{cat_accion} - {texto_manual}"
                                             elif sub_accion:
                                                 accion_final = f"{cat_accion} - {sub_accion}"
-                                with colC:
-                                    fecha_compromiso_range = st.date_input(f"Rango ejecución {i}:", value=(fecha_default_planificacion, fecha_default_planificacion), key=f"fecha_{idx}_{i}")
+                                with colC1:
+                                    fecha_inicio_act = st.date_input(f"Fecha Inicio {i}:", value=fecha_default_planificacion, key=f"fecha_ini_{idx}_{i}")
+                                with colC2:
+                                    fecha_fin_act = st.date_input(f"Fecha Fin {i}:", value=fecha_default_planificacion, key=f"fecha_fin_{idx}_{i}")
 
                                 if accion_final.strip():
                                     act_dates = []
-                                    if isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 2:
-                                        s_d, e_d = fecha_compromiso_range
-                                        delta = (e_d - s_d).days
-                                        for d in range(delta + 1):
-                                            dt = s_d + timedelta(days=d)
-                                            # Colador de Fines de semana y Feriados
-                                            if dt.weekday() < 5 and dt not in feriados_cl:
-                                                act_dates.append(dt)
-                                    elif isinstance(fecha_compromiso_range, (tuple, list)) and len(fecha_compromiso_range) == 1:
-                                        act_dates = [fecha_compromiso_range[0]]
-                                    else:
-                                        act_dates = [fecha_compromiso_range]
+                                    s_d, e_d = fecha_inicio_act, fecha_fin_act
+                                    if e_d < s_d:
+                                        s_d, e_d = e_d, s_d
+                                    delta = (e_d - s_d).days
+                                    for d in range(delta + 1):
+                                        dt = s_d + timedelta(days=d)
+                                        # Colador de Fines de semana y Feriados
+                                        if dt.weekday() < 5 and dt not in feriados_cl:
+                                            act_dates.append(dt)
 
-                                    if not act_dates: act_dates = [s_d if 's_d' in locals() else fecha_compromiso_range]
+                                    if not act_dates: act_dates = [s_d]
 
                                     # --- ALERTA DE DUPLICIDAD CON EL PLAN MENSUAL ---
                                     # Misma acción (categoría + detalle), mismo caso y misma fecha ya presentes
@@ -797,27 +796,26 @@ def vista_planificador(modo="Semanal"):
                 st.markdown('<div class="marco-gestion"><h4>🤝 Gestión Comercial</h4></div>', unsafe_allow_html=True)
                 num_comercial = st.number_input("Cantidad de gestiones comerciales:", min_value=0, max_value=15, value=1, key="num_comercial")
                 for i in range(1, int(num_comercial) + 1):
-                    c_acc, c_fec = st.columns([2, 1])
+                    c_acc, c_fec1, c_fec2 = st.columns([2, 1, 1])
                     with c_acc:
                         acc_com = st.text_input(f"Detalle gestión {i}:", placeholder="Reuniones, visitas a corredoras...", key=f"txt_com_{i}")
-                    with c_fec:
-                        fec_com_range = st.date_input(f"Rango {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fec_com_{i}")
-                    
+                    with c_fec1:
+                        fec_com_ini = st.date_input(f"Fecha Inicio {i}:", value=ahora_chile.date(), key=f"fec_com_ini_{i}")
+                    with c_fec2:
+                        fec_com_fin = st.date_input(f"Fecha Fin {i}:", value=ahora_chile.date(), key=f"fec_com_fin_{i}")
+
                     if acc_com.strip():
                         com_dates = []
-                        if isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 2:
-                            s_d, e_d = fec_com_range
-                            delta = (e_d - s_d).days
-                            for d in range(delta + 1):
-                                dt = s_d + timedelta(days=d)
-                                if dt.weekday() < 5 and dt not in feriados_cl:
-                                    com_dates.append(dt)
-                        elif isinstance(fec_com_range, (tuple, list)) and len(fec_com_range) == 1:
-                            com_dates = [fec_com_range[0]]
-                        else:
-                            com_dates = [fec_com_range]
+                        s_d, e_d = fec_com_ini, fec_com_fin
+                        if e_d < s_d:
+                            s_d, e_d = e_d, s_d
+                        delta = (e_d - s_d).days
+                        for d in range(delta + 1):
+                            dt = s_d + timedelta(days=d)
+                            if dt.weekday() < 5 and dt not in feriados_cl:
+                                com_dates.append(dt)
 
-                        if not com_dates: com_dates = [s_d if 's_d' in locals() else fec_com_range]
+                        if not com_dates: com_dates = [s_d]
 
                         for dt in com_dates:
                             plan_transaccional.append({
@@ -832,27 +830,26 @@ def vista_planificador(modo="Semanal"):
                 st.markdown('<div class="marco-gestion"><h4>⚙️ Gestión Administrativa</h4></div>', unsafe_allow_html=True)
                 num_admin = st.number_input("Cantidad de gestiones administrativas:", min_value=0, max_value=15, value=1, key="num_admin")
                 for i in range(1, int(num_admin) + 1):
-                    c_acc, c_fec = st.columns([2, 1])
+                    c_acc, c_fec1, c_fec2 = st.columns([2, 1, 1])
                     with c_acc:
                         acc_adm = st.text_input(f"Detalle gestión {i}:", placeholder="Capacitaciones, comités...", key=f"txt_adm_{i}")
-                    with c_fec:
-                        fec_adm_range = st.date_input(f"Rango {i}:", value=(ahora_chile.date(), ahora_chile.date()), key=f"fec_adm_{i}")
-                    
+                    with c_fec1:
+                        fec_adm_ini = st.date_input(f"Fecha Inicio {i}:", value=ahora_chile.date(), key=f"fec_adm_ini_{i}")
+                    with c_fec2:
+                        fec_adm_fin = st.date_input(f"Fecha Fin {i}:", value=ahora_chile.date(), key=f"fec_adm_fin_{i}")
+
                     if acc_adm.strip():
                         adm_dates = []
-                        if isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 2:
-                            s_d, e_d = fec_adm_range
-                            delta = (e_d - s_d).days
-                            for d in range(delta + 1):
-                                dt = s_d + timedelta(days=d)
-                                if dt.weekday() < 5 and dt not in feriados_cl:
-                                    adm_dates.append(dt)
-                        elif isinstance(fec_adm_range, (tuple, list)) and len(fec_adm_range) == 1:
-                            adm_dates = [fec_adm_range[0]]
-                        else:
-                            adm_dates = [fec_adm_range]
+                        s_d, e_d = fec_adm_ini, fec_adm_fin
+                        if e_d < s_d:
+                            s_d, e_d = e_d, s_d
+                        delta = (e_d - s_d).days
+                        for d in range(delta + 1):
+                            dt = s_d + timedelta(days=d)
+                            if dt.weekday() < 5 and dt not in feriados_cl:
+                                adm_dates.append(dt)
 
-                        if not adm_dates: adm_dates = [s_d if 's_d' in locals() else fec_adm_range]
+                        if not adm_dates: adm_dates = [s_d]
 
                         for dt in adm_dates:
                             plan_transaccional.append({
