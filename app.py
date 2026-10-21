@@ -2743,6 +2743,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     import os
     import json
     import pandas as pd
+    import pytz
     from docx import Document
     from docx.shared import Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -2751,6 +2752,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     # Carga silenciosa de Base Maestra para rescatar Corredora, Aseguradora y Fecha de Creación
     dict_maestro = {}
+    dict_dias_asignacion = {}  # numero_caso -> días desde Fecha de asignación (hoy)
     df_bm = pd.DataFrame()
     filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
     if os.path.exists(filepath_bm):
@@ -2850,11 +2852,12 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Honorarios (UF)']
 
-    def agregar_tabla_entregables(doc, df_sub, color_header):
-        table = doc.add_table(rows=1, cols=len(columnas_tabla))
+    def agregar_tabla_entregables(doc, df_sub, color_header, mostrar_dias_asignacion=False):
+        cols_locales = columnas_tabla + (['Días desde Asignación'] if mostrar_dias_asignacion else [])
+        table = doc.add_table(rows=1, cols=len(cols_locales))
         table.style = 'Table Grid'
         hdr_cells = table.rows[0].cells
-        for i, col_name in enumerate(columnas_tabla):
+        for i, col_name in enumerate(cols_locales):
             hdr_cells[i].text = col_name
             run = hdr_cells[i].paragraphs[0].runs[0]
             run.font.bold = True
@@ -2887,9 +2890,31 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             except Exception:
                 row_cells[6].text = "0.00"
 
-            for j in range(1, len(columnas_tabla)):
+            for j in range(1, len(cols_locales)):
                 if row_cells[j].paragraphs[0].runs:
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+
+            if mostrar_dias_asignacion:
+                dias = dict_dias_asignacion.get(num_caso)
+                row_cells[7].text = str(dias) if dias is not None else 'N/D'
+                if row_cells[7].paragraphs[0].runs:
+                    row_cells[7].paragraphs[0].runs[0].font.size = Pt(9)
+
+                # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
+                if dias is None:
+                    fill_fila = None
+                elif dias <= 5:
+                    fill_fila = 'C6EFCE'
+                elif dias == 6:
+                    fill_fila = 'FFEB9C'
+                else:
+                    fill_fila = 'FFC7CE'
+
+                if fill_fila:
+                    for celda in row_cells:
+                        shading_fila = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_fila))
+                        celda._tc.get_or_add_tcPr().append(shading_fila)
+
 
     # --- SECCIÓN: CASOS NUEVOS DE LA SEMANA (por Fecha de Creación en Base Maestra) ---
     def parsear_fecha_creacion(val):
@@ -2927,11 +2952,24 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         col_subestado_n  = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
         col_aseguradora_n = 'Compañía de seguros' if 'Compañía de seguros' in df_bm.columns else (df_bm.columns[6] if len(df_bm.columns) > 6 else None)
         col_preliminar_n  = 'Informe inicial completado' if 'Informe inicial completado' in df_bm.columns else (df_bm.columns[44] if len(df_bm.columns) > 44 else None)
+        col_asignacion_n  = 'Fecha de asignación' if 'Fecha de asignación' in df_bm.columns else (df_bm.columns[23] if len(df_bm.columns) > 23 else None)
 
         if col_creado is not None:
             df_bm_n = df_bm.copy()
             df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
             df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+
+            # Días desde asignación por caso, calculados respecto a hoy (no se usa el
+            # valor "Días desde asignación" de la Base Maestra porque queda desactualizado
+            # entre la exportación del Excel y la generación de este reporte).
+            if col_asignacion_n is not None:
+                hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
+                df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_creacion)
+                for _, _r in df_bm_n.iterrows():
+                    _num = str(_r.get(col_caso_n, '')).strip()
+                    _fa = _r.get('_fecha_asignacion')
+                    if _num and _fa is not None:
+                        dict_dias_asignacion[_num] = (hoy_ref - _fa).days
 
             if dias_semana_target:
                 fecha_ini, fecha_fin = min(dias_semana_target), max(dias_semana_target)
@@ -3066,7 +3104,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
         doc.add_heading(f'No Entregados ({len(df_no_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
         if not df_no_entregados.empty:
-            agregar_tabla_entregables(doc, df_no_entregados, 'D9534F')
+            if tipo == 'Preliminar':
+                doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más.').runs[0].font.italic = True
+            agregar_tabla_entregables(doc, df_no_entregados, 'D9534F', mostrar_dias_asignacion=(tipo == 'Preliminar'))
         else:
             doc.add_paragraph('Todos los entregables de esta categoría fueron realizados.')
         doc.add_paragraph('')
