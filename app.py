@@ -3831,76 +3831,248 @@ def generar_pptx_individual(ajustador, df_week, target_week_id, week_id_obj):
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
 # ---------------------------------------------------------
+def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_opcion):
+    import pandas as pd
+    import pytz
+    import streamlit as st
+    from datetime import datetime
+
+    st.markdown("### 🎯 Cumplimiento de Hitos del Plan Mensual")
+    st.info("Hitos comprometidos en el Plan Mensual de cada ajustador para este período: cuántos fueron Realizados y cuántos quedaron con fecha objetivo vencida sin haber sido incorporados a ninguna semana.")
+
+    hoy_dt = datetime.now(pytz.timezone('America/Santiago')).date()
+
+    filas = []
+    for ajustador in ajustadores_validos:
+        plan_mes = load_plan_mensual_local(ajustador, explicit_month_id=target_month_id)
+        if not plan_mes:
+            continue
+
+        comprometidos = len(plan_mes)
+        realizados = sum(1 for t in plan_mes if t.get('estado_cumplimiento') == 'Realizado')
+        vencidos_sin_agendar = 0
+        for t in plan_mes:
+            if t.get('estado_cumplimiento') == 'Realizado' or t.get('agendado_semana'):
+                continue
+            try:
+                fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if fec_obj < hoy_dt:
+                vencidos_sin_agendar += 1
+
+        pct_cumplimiento = (realizados / comprometidos * 100) if comprometidos > 0 else 0.0
+
+        filas.append({
+            'Ajustador': ajustador,
+            'Comprometidos': comprometidos,
+            'Realizados': realizados,
+            '% Cumplimiento': round(pct_cumplimiento, 1),
+            'Vencidos sin Agendar': vencidos_sin_agendar,
+        })
+
+    if not filas:
+        st.warning(f"No hay Planes Mensuales registrados para «{mes_opcion}».")
+        return
+
+    df_hitos = pd.DataFrame(filas).sort_values('Ajustador').reset_index(drop=True)
+
+    tot_comprometidos = int(df_hitos['Comprometidos'].sum())
+    tot_realizados = int(df_hitos['Realizados'].sum())
+    tot_vencidos = int(df_hitos['Vencidos sin Agendar'].sum())
+    tot_pct = (tot_realizados / tot_comprometidos * 100) if tot_comprometidos > 0 else 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Hitos Comprometidos", tot_comprometidos)
+    c2.metric("Realizados", tot_realizados)
+    c3.metric("% Cumplimiento Global", f"{tot_pct:.1f}%")
+    c4.metric("Vencidos sin Agendar", tot_vencidos, delta_color="inverse")
+
+    st.dataframe(df_hitos, use_container_width=True, hide_index=True)
+
+
+def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
+    import pandas as pd
+    import streamlit as st
+
+    st.markdown("### 📦 Entregables Acumulados del Mes")
+    st.info("Misma clasificación del Reporte de Entregables semanal, sumando todas las semanas comprendidas en este mes.")
+
+    if df_mes.empty:
+        st.warning(f"No hay datos de planificación registrados para «{mes_opcion}».")
+        return
+
+    df_informes = df_mes[df_mes['categoria'] == 'Operativa'].copy()
+    df_informes = df_informes[df_informes['accion'].str.strip() != '']
+
+    def clasificar_informe(accion):
+        a = str(accion).lower()
+        if 'acta de inspección' in a:
+            return 'Actas de Inspección'
+        elif 'informe final de liquidación' in a:
+            return 'Informes Finales de Liquidación'
+        elif 'carta de cobertura (rechazo)' in a:
+            return 'Cartas de Cobertura (Rechazo)'
+        elif 'carta de análisis de pérdidas' in a:
+            return 'Cartas de Análisis de Pérdidas'
+        elif 'informe intermedio' in a:
+            return 'Informes Intermedios'
+        elif 'preliminar' in a:
+            return 'Informes Preliminares'
+        elif 'respuesta a impugnación' in a or 'ademdum' in a:
+            return 'Respuestas a Impugnación / Adendum'
+        return None
+
+    df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
+    df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
+
+    orden_tipos = [
+        'Actas de Inspección',
+        'Informes Finales de Liquidación',
+        'Cartas de Cobertura (Rechazo)',
+        'Cartas de Análisis de Pérdidas',
+        'Informes Intermedios',
+        'Informes Preliminares',
+        'Respuestas a Impugnación / Adendum',
+    ]
+
+    filas = []
+    for tipo in orden_tipos:
+        df_tipo = df_informes[df_informes['tipo_informe'] == tipo]
+        df_tipo_dedup = (
+            df_tipo.sort_values('estado_cumplimiento', ascending=False)
+                   .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
+        )
+        n_entregados = int((df_tipo_dedup['estado_cumplimiento'] == 'Realizado').sum())
+        n_no_entregados = int((df_tipo_dedup['estado_cumplimiento'] != 'Realizado').sum())
+        filas.append({
+            'Clasificación': tipo,
+            'Entregados': n_entregados,
+            'No Entregados': n_no_entregados,
+            'Total': n_entregados + n_no_entregados,
+        })
+
+    df_resumen = pd.DataFrame(filas)
+
+    if df_resumen['Total'].sum() == 0:
+        st.warning(f"No se registraron entregables clasificables para «{mes_opcion}».")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Entregados", int(df_resumen['Entregados'].sum()))
+    c2.metric("Total No Entregados", int(df_resumen['No Entregados'].sum()))
+    c3.metric("Total General", int(df_resumen['Total'].sum()))
+
+    st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+
+
 def vista_reportes():
     import streamlit as st
+    import calendar
+    import pytz
     from datetime import datetime, timedelta
-    
+
     st.title("📊 Tablero de Control y Planificación")
-    
-    col_radio, col_btn = st.columns([2, 1])
-    with col_radio:
-        week_id_obj = st.radio(
-            "Seleccione la semana a reportar:", 
-            ["Semana Pasada", "Semana Actual", "Próxima Semana"], 
-            index=1,
-            horizontal=True
-        )
-    with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
 
-    if week_id_obj == "Semana Pasada":
-        offset = -1
-    elif week_id_obj == "Semana Actual":
-        offset = 0
-    else:
-        offset = 1
-        
-    hoy = datetime.now()
-    # Calculamos la fecha base del periodo seleccionado
-    fecha_referencia = hoy + timedelta(weeks=offset)
-    # Obtenemos el lunes de esa semana
-    lunes = fecha_referencia - timedelta(days=fecha_referencia.weekday())
-    dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
-        
-    target_week_id = get_week_identifier(offset)
+    tab_semanal, tab_mensual = st.tabs(["📅 Reportes Semanales", "🗓️ Reportes Mensuales"])
 
-    # 4.2 Llamada al motor de datos
-    df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
+    with tab_semanal:
+        col_radio, col_btn = st.columns([2, 1])
+        with col_radio:
+            week_id_obj = st.radio(
+                "Seleccione la semana a reportar:",
+                ["Semana Pasada", "Semana Actual", "Próxima Semana"],
+                index=1,
+                horizontal=True
+            )
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            forzar_sync = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True)
 
-    tab_dashboard, tab_operacional, tab_gantt, tab_sin_mov = st.tabs([
-        "📈 Dashboard Ejecutivo (BI)",
-        "📋 Reporte Operacional de Equipo",
-        "📊 Carta Gantt Operativa",
-        "🔴 Casos Sin Movimiento"
-    ])
+        if week_id_obj == "Semana Pasada":
+            offset = -1
+        elif week_id_obj == "Semana Actual":
+            offset = 0
+        else:
+            offset = 1
 
-    with tab_dashboard:
-        renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
-    with tab_operacional:
-        renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
-    with tab_gantt:
-        renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
-    with tab_sin_mov:
-        st.markdown("### 🔴 Casos Sin Movimiento (> 21 días)")
-        st.info("Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
-        if st.button("📥 Generar Reporte Casos Sin Movimiento (WORD)", type="primary", use_container_width=True, key="btn_sin_mov"):
-            with st.spinner("Analizando casos..."):
-                try:
-                    word_bytes, error_msg = generar_reporte_sin_movimiento_word(df_raw)
-                    if error_msg:
-                        st.error(error_msg)
-                    else:
-                        st.download_button(
-                            label="⬇️ Descargar Reporte Casos Sin Movimiento",
-                            data=word_bytes,
-                            file_name=f"Casos_Sin_Movimiento_{target_week_id}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            type="primary",
-                            key="dl_sin_mov"
-                        )
-                except Exception as e:
-                    st.error(f"Error al generar el reporte: {e}")
+        hoy = datetime.now()
+        # Calculamos la fecha base del periodo seleccionado
+        fecha_referencia = hoy + timedelta(weeks=offset)
+        # Obtenemos el lunes de esa semana
+        lunes = fecha_referencia - timedelta(days=fecha_referencia.weekday())
+        dias_semana_target = [(lunes + timedelta(days=i)).date() for i in range(7)]
+
+        target_week_id = get_week_identifier(offset)
+
+        # 4.2 Llamada al motor de datos
+        df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
+
+        tab_dashboard, tab_operacional, tab_gantt, tab_sin_mov = st.tabs([
+            "📈 Dashboard Ejecutivo (BI)",
+            "📋 Reporte Operacional de Equipo",
+            "📊 Carta Gantt Operativa",
+            "🔴 Casos Sin Movimiento"
+        ])
+
+        with tab_dashboard:
+            renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
+        with tab_operacional:
+            renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
+        with tab_gantt:
+            renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
+        with tab_sin_mov:
+            st.markdown("### 🔴 Casos Sin Movimiento (> 21 días)")
+            st.info("Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
+            if st.button("📥 Generar Reporte Casos Sin Movimiento (WORD)", type="primary", use_container_width=True, key="btn_sin_mov"):
+                with st.spinner("Analizando casos..."):
+                    try:
+                        word_bytes, error_msg = generar_reporte_sin_movimiento_word(df_raw)
+                        if error_msg:
+                            st.error(error_msg)
+                        else:
+                            st.download_button(
+                                label="⬇️ Descargar Reporte Casos Sin Movimiento",
+                                data=word_bytes,
+                                file_name=f"Casos_Sin_Movimiento_{target_week_id}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                type="primary",
+                                key="dl_sin_mov"
+                            )
+                    except Exception as e:
+                        st.error(f"Error al generar el reporte: {e}")
+
+    with tab_mensual:
+        col_radio_m, col_btn_m = st.columns([2, 1])
+        with col_radio_m:
+            mes_opcion = st.radio(
+                "Seleccione el mes a reportar:",
+                ["Mes Actual", "Mes Pasado"],
+                index=0,
+                horizontal=True,
+                key="reportes_mes_opcion"
+            )
+        with col_btn_m:
+            st.markdown("<br>", unsafe_allow_html=True)
+            forzar_sync_mes = st.button("🔄 Sincronizar Nube ahora", type="primary", use_container_width=True, key="btn_sync_mensual")
+
+        offset_mes = 0 if mes_opcion == "Mes Actual" else -1
+        target_month_id = get_month_identifier(offset_mes)
+
+        ahora_chile_mes = datetime.now(pytz.timezone('America/Santiago'))
+        anio_target = ahora_chile_mes.year
+        mes_target = ahora_chile_mes.month + offset_mes
+        while mes_target < 1:
+            mes_target += 12
+            anio_target -= 1
+        ultimo_dia_mes = calendar.monthrange(anio_target, mes_target)[1]
+        dias_mes_target = [datetime(anio_target, mes_target, d).date() for d in range(1, ultimo_dia_mes + 1)]
+
+        df_mes, df_mes_raw, ajustadores_validos_mes = sincronizar_y_cargar_datos(forzar_sync_mes, dias_mes_target)
+
+        renderizar_reporte_mensual_hitos(ajustadores_validos_mes, target_month_id, mes_opcion)
+        st.markdown("---")
+        renderizar_reporte_mensual_entregables(df_mes, mes_opcion)
 
     # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
     if week_id_obj in ("Semana Actual", "Semana Pasada"):
