@@ -3966,6 +3966,236 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
     st.dataframe(df_resumen, use_container_width=True, hide_index=True)
 
 
+def renderizar_reporte_mensual_facturacion(df_mes, mes_opcion):
+    import pandas as pd
+    import streamlit as st
+
+    st.markdown("### 💰 Facturación y WIP del Mes")
+    st.info("Honorarios (UF) de las tareas Realizadas en el mes: ingreso efectivo facturable (Informes Finales de Liquidación / Cartas de Cobertura-Rechazo) versus valor potencial traccionado (resto del trabajo operativo en proceso).")
+
+    if df_mes.empty:
+        st.warning(f"No hay datos de planificación registrados para «{mes_opcion}».")
+        return
+
+    df_realizados = df_mes[df_mes['estado_cumplimiento'] == 'Realizado'].copy()
+    if df_realizados.empty:
+        st.info("No se registran tareas Realizadas en este mes todavía.")
+        return
+
+    cond_facturable = df_realizados['accion'].str.contains(r'Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
+    df_facturable = df_realizados[cond_facturable].drop_duplicates(subset=['Ajustador', 'numero_caso'])
+    uf_facturables_caja = df_facturable['honorarios_estimados'].sum()
+
+    cond_wip = (df_realizados['categoria'] == 'Operativa') & (~cond_facturable)
+    df_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])
+    uf_traccionadas_wip = df_wip['honorarios_estimados'].sum()
+
+    c1, c2 = st.columns(2)
+    c1.metric("Ingreso Efectivo Facturable (Cierres/Rechazos)", f"{uf_facturables_caja:,.2f} UF", delta="Directo a Caja", delta_color="normal")
+    c2.metric("Valor Potencial Traccionado (WIP / Proceso)", f"{uf_traccionadas_wip:,.2f} UF", delta="Esfuerzo Operativo", delta_color="off")
+
+    ajustadores_con_movimiento = sorted(set(df_facturable['Ajustador']).union(set(df_wip['Ajustador'])))
+    filas = []
+    for ajustador in ajustadores_con_movimiento:
+        uf_fact = df_facturable[df_facturable['Ajustador'] == ajustador]['honorarios_estimados'].sum()
+        uf_wip = df_wip[df_wip['Ajustador'] == ajustador]['honorarios_estimados'].sum()
+        filas.append({
+            'Ajustador': ajustador,
+            'UF Facturable': round(float(uf_fact), 2),
+            'UF WIP': round(float(uf_wip), 2),
+            'UF Total': round(float(uf_fact + uf_wip), 2),
+        })
+
+    if filas:
+        df_resumen_aj = pd.DataFrame(filas).sort_values('UF Total', ascending=False).reset_index(drop=True)
+        st.dataframe(df_resumen_aj, use_container_width=True, hide_index=True)
+
+
+def renderizar_reporte_mensual_tendencia(df_mes, dias_mes_target, mes_opcion):
+    import pandas as pd
+    import streamlit as st
+    import plotly.graph_objects as go
+    from datetime import timedelta
+
+    st.markdown("### 📈 Tendencia Semana a Semana del Mes")
+    st.info("Evolución de la carga planificada, lo efectivamente realizado y la adherencia al plan, semana a semana dentro del mes seleccionado.")
+
+    if df_mes.empty:
+        st.warning(f"No hay datos de planificación registrados para «{mes_opcion}».")
+        return
+
+    grupos_semana = {}
+    for d in dias_mes_target:
+        lunes = d - timedelta(days=d.weekday())
+        grupos_semana.setdefault(lunes, []).append(d)
+
+    filas = []
+    for lunes in sorted(grupos_semana.keys()):
+        dias_grupo = grupos_semana[lunes]
+        domingo = lunes + timedelta(days=6)
+        df_sem = df_mes[df_mes['fecha_filtro'].isin(dias_grupo)]
+
+        planificadas = len(df_sem[df_sem['tipo_actividad'] == 'Programada'])
+        planificadas_hechas = len(df_sem[(df_sem['tipo_actividad'] == 'Programada') & (df_sem['estado_cumplimiento'] == 'Realizado')])
+        adherencia = (planificadas_hechas / planificadas * 100) if planificadas > 0 else 0.0
+
+        etiqueta = f"{lunes.strftime('%d/%m')}–{domingo.strftime('%d/%m')}"
+        filas.append({
+            'Semana': etiqueta,
+            'Planificadas': planificadas,
+            'Realizadas': planificadas_hechas,
+            'Adherencia %': round(adherencia, 1),
+        })
+
+    df_tendencia = pd.DataFrame(filas)
+
+    if df_tendencia['Planificadas'].sum() == 0 and df_tendencia['Realizadas'].sum() == 0:
+        st.warning(f"No se registraron tareas programadas para «{mes_opcion}».")
+        return
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df_tendencia['Semana'], y=df_tendencia['Planificadas'], name='Planificadas', marker_color='#B0C4DE'))
+    fig.add_trace(go.Bar(x=df_tendencia['Semana'], y=df_tendencia['Realizadas'], name='Realizadas', marker_color='#217346'))
+    fig.add_trace(go.Scatter(
+        x=df_tendencia['Semana'], y=df_tendencia['Adherencia %'], name='Adherencia %',
+        mode='lines+markers', yaxis='y2', line=dict(color='#C0392B', width=3)
+    ))
+    fig.update_layout(
+        barmode='group',
+        yaxis=dict(title='N° de Tareas'),
+        yaxis2=dict(title='Adherencia %', overlaying='y', side='right', range=[0, 100]),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(t=60),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(df_tendencia, use_container_width=True, hide_index=True)
+
+
+def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
+    import pandas as pd
+    import pytz
+    import streamlit as st
+    from datetime import datetime
+
+    st.markdown("### 🆕 Casos Nuevos del Mes y Preliminares Pendientes")
+
+    df_bm = load_master_base()
+    if df_bm is None or df_bm.empty:
+        st.warning("No hay Base Maestra cargada para calcular esta sección.")
+        return
+
+    def parsear_fecha_creacion_mes(val):
+        try:
+            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                return None
+            s = str(val).strip()
+            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                serial = int(float(s))
+                if 30000 < serial < 60000:
+                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                parsed = pd.to_datetime(s, errors='coerce')
+            else:
+                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
+            return parsed.date() if pd.notna(parsed) else None
+        except Exception:
+            return None
+
+    col_caso = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+    col_div = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
+    col_nick = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
+    col_corr = 'Corredora' if 'Corredora' in df_bm.columns else df_bm.columns[7]
+    col_aj = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
+    col_aseg = 'Asegurado' if 'Asegurado' in df_bm.columns else df_bm.columns[11]
+    col_creado = 'Creado en' if 'Creado en' in df_bm.columns else (df_bm.columns[20] if len(df_bm.columns) > 20 else None)
+    col_estado = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+    col_subestado = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
+    col_aseguradora = 'Compañía de seguros' if 'Compañía de seguros' in df_bm.columns else (df_bm.columns[6] if len(df_bm.columns) > 6 else None)
+    col_preliminar = 'Informe inicial completado' if 'Informe inicial completado' in df_bm.columns else (df_bm.columns[44] if len(df_bm.columns) > 44 else None)
+    col_asignacion = 'Fecha de asignación' if 'Fecha de asignación' in df_bm.columns else (df_bm.columns[23] if len(df_bm.columns) > 23 else None)
+
+    if col_creado is None:
+        st.warning("La Base Maestra no tiene columna de Fecha de Creación.")
+        return
+
+    df_bm_n = df_bm.copy()
+    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion_mes)
+    df_bm_n['_division'] = df_bm_n[col_div].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+
+    dict_dias_asignacion = {}
+    if col_asignacion is not None:
+        hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
+        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion].apply(parsear_fecha_creacion_mes)
+        for _, r in df_bm_n.iterrows():
+            num = str(r.get(col_caso, '')).strip()
+            fa = r.get('_fecha_asignacion')
+            if num and fa is not None:
+                dict_dias_asignacion[num] = (hoy_ref - fa).days
+
+    fecha_ini, fecha_fin = min(dias_mes_target), max(dias_mes_target)
+    df_casos_nuevos = df_bm_n[
+        df_bm_n['_fecha_creacion'].notna() &
+        (df_bm_n['_fecha_creacion'] >= fecha_ini) &
+        (df_bm_n['_fecha_creacion'] <= fecha_fin)
+    ].copy()
+
+    df_sin_preliminar = pd.DataFrame()
+    if col_estado is not None and col_preliminar is not None:
+        df_sin_preliminar = df_bm_n[
+            (df_bm_n[col_estado].astype(str).str.strip().str.lower() != 'cerrado') &
+            (df_bm_n[col_preliminar].astype(str).str.strip().str.lower() != 'si')
+        ].copy()
+
+    st.markdown(f"**Casos Nuevos del Mes ({mes_opcion}): {len(df_casos_nuevos)}**")
+    if not df_casos_nuevos.empty:
+        tabla_cn = df_casos_nuevos[[col_aj, col_caso, col_nick, col_aseg, col_corr, '_fecha_creacion', '_division']].copy()
+        tabla_cn.columns = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Fecha de Creación', 'División']
+        tabla_cn = tabla_cn.sort_values(['División', 'Fecha de Creación'])
+        st.dataframe(tabla_cn, use_container_width=True, hide_index=True)
+    else:
+        st.info("No se registraron casos nuevos en este mes.")
+
+    st.markdown(f"**Casos Vigentes sin Informe Preliminar: {len(df_sin_preliminar)}**")
+    st.caption("Incluye todos los casos vigentes (no solo los del mes). Color según días desde la Fecha de Asignación: 🟢 0-5 días · 🟡 6 días · 🔴 7+ días.")
+    if not df_sin_preliminar.empty:
+        tabla_sp = df_sin_preliminar.copy()
+        tabla_sp['Días desde Asignación'] = tabla_sp[col_caso].astype(str).str.strip().map(dict_dias_asignacion)
+
+        cols_sp = [col_aj, col_caso, col_nick, col_aseg]
+        nombres_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado']
+        if col_aseguradora:
+            cols_sp.append(col_aseguradora)
+            nombres_sp.append('Aseguradora')
+        if col_estado:
+            cols_sp.append(col_estado)
+            nombres_sp.append('Estado')
+        if col_subestado:
+            cols_sp.append(col_subestado)
+            nombres_sp.append('Sub estado')
+        cols_sp += ['_fecha_creacion', '_division', 'Días desde Asignación']
+        nombres_sp += ['Fecha de Creación', 'División', 'Días desde Asignación']
+
+        tabla_sp = tabla_sp[cols_sp].copy()
+        tabla_sp.columns = nombres_sp
+        tabla_sp = tabla_sp.sort_values(['División', 'Fecha de Creación'])
+
+        def colorear_fila(row):
+            dias = row['Días desde Asignación']
+            if pd.isna(dias):
+                return [''] * len(row)
+            if dias <= 5:
+                color = 'background-color: #C6EFCE'
+            elif dias == 6:
+                color = 'background-color: #FFEB9C'
+            else:
+                color = 'background-color: #FFC7CE'
+            return [color] * len(row)
+
+        st.dataframe(tabla_sp.style.apply(colorear_fila, axis=1), use_container_width=True, hide_index=True)
+    else:
+        st.success("Todos los casos vigentes cuentan con Informe Preliminar.")
+
+
 def vista_reportes():
     import streamlit as st
     import calendar
@@ -4073,6 +4303,12 @@ def vista_reportes():
         renderizar_reporte_mensual_hitos(ajustadores_validos_mes, target_month_id, mes_opcion)
         st.markdown("---")
         renderizar_reporte_mensual_entregables(df_mes, mes_opcion)
+        st.markdown("---")
+        renderizar_reporte_mensual_facturacion(df_mes, mes_opcion)
+        st.markdown("---")
+        renderizar_reporte_mensual_tendencia(df_mes, dias_mes_target, mes_opcion)
+        st.markdown("---")
+        renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion)
 
     # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
     if week_id_obj in ("Semana Actual", "Semana Pasada"):
