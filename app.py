@@ -76,6 +76,35 @@ def get_google_sheet():
             st.error(f"⚠️ Error al abrir la hoja de cálculo: {e}")
     return None
 
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_etapas_pipeline():
+    """Lee la 'Etapa del Caso' que gestiona JPV Pipeline (hoja Pipeline_Backup del mismo
+    Google Sheet compartido) y devuelve un diccionario numero_caso -> etapa.
+
+    Este flag lo edita y confirma exclusivamente el Pipeline; aquí es solo lectura (sin
+    sincronización de vuelta). Se cachea 60 segundos, igual que las lecturas propias de
+    Pipeline, para no competir por la misma cuota de la API de Google Sheets."""
+    import re
+    client = get_google_client()
+    if not client:
+        return {}
+    try:
+        doc = client.open_by_url(st.secrets["google_sheet_url"])
+        ws = doc.worksheet("Pipeline_Backup")
+        metadata = ws.row_values(1)
+        if len(metadata) < 2 or metadata[0] != "FECHA_ACTUALIZACION":
+            return {}
+        registros = ws.get_all_records(head=2)
+        etapas = {}
+        for fila in registros:
+            numero_caso = re.sub(r'\.0$', '', str(fila.get('Número de caso', '')).strip())
+            etapa = str(fila.get('Etapa del Caso', '')).strip()
+            if numero_caso and etapa:
+                etapas[numero_caso] = etapa
+        return etapas
+    except Exception:
+        return {}
+
 def load_master_base():
     """Carga y devuelve el DataFrame de la Base Maestra sin renderizar UI."""
     filepath = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
@@ -434,6 +463,10 @@ def vista_planificador(modo="Semanal"):
         if ajustador_seleccionado:
             casos_vigentes = df_maestro[(df_maestro[col_ajustador] == ajustador_seleccionado) & (df_maestro['Estado'] != 'Cerrado')].copy()
 
+            # Etapa del Caso: flag de solo lectura que gestiona JPV Pipeline (Pipeline_Backup
+            # en el mismo Google Sheet). Aquí nunca se edita, solo se muestra como referencia.
+            etapas_pipeline = cargar_etapas_pipeline()
+
             # --- ALERTA: HITOS DEL PLAN MENSUAL CON FECHA OBJETIVO VENCIDA ---
             # Un hito solo aparece para comprometerse en la semana exacta de su fecha
             # objetivo; si esa semana pasa sin incorporarlo, queda "dormido" sin aviso.
@@ -664,13 +697,15 @@ def vista_planificador(modo="Semanal"):
                     except Exception: pass
                     
                     nickname = f" <span style='color:#004a99;'>[{fila['Nickname']}]</span>" if 'Nickname' in fila and pd.notna(fila['Nickname']) and str(fila['Nickname']).strip() != "" else ""
-                    
+                    etapa_pipeline_caso = etapas_pipeline.get(str(caso_num).strip(), "")
+                    etapa_html = f" | <b>Etapa (Pipeline):</b> {etapa_pipeline_caso}" if etapa_pipeline_caso else ""
+
                     with st.container():
                         st.markdown(f"""
                         <div class="marco-caso">
                             <h4>[{caso_num}] {asegurado}{nickname}</h4>
                             <p style="color:gray; font-size: 0.9em; margin-bottom: 5px;">
-                                <b>Clasificación:</b> {tramo} | <b>Estado Actual:</b> {estado_actual} | <b>Sub-estado Actual:</b> {subestado_actual}
+                                <b>Clasificación:</b> {tramo} | <b>Estado Actual:</b> {estado_actual} | <b>Sub-estado Actual:</b> {subestado_actual}{etapa_html}
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
