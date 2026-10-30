@@ -3085,7 +3085,8 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     doc.add_heading('2. Casos sin Informe Preliminar', level=1)
     if not df_sin_preliminar.empty:
-        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación']
+        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación']
+        doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más.').runs[0].font.italic = True
 
         # Las divisiones se ordenan por su caso más antiguo (no alfabéticamente),
         # para que la sección se lea de más antiguo a más nuevo de principio a fin.
@@ -3107,13 +3108,16 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
             for _, row in df_div.sort_values('_fecha_creacion').iterrows():
+                num_caso_sp = str(row.get(col_caso_n, '')).strip()
+                dias_sp = dict_dias_asignacion.get(num_caso_sp)
+
                 row_cells = table_sp.add_row().cells
                 row_cells[0].text = str(row.get(col_aj_n, ''))
                 run_aj = row_cells[0].paragraphs[0].runs[0]
                 run_aj.font.bold = True
                 run_aj.font.color.rgb = RGBColor(0, 51, 102)
                 run_aj.font.size = Pt(9)
-                row_cells[1].text = str(row.get(col_caso_n, ''))
+                row_cells[1].text = num_caso_sp
                 row_cells[2].text = str(row.get(col_nick_n, ''))
                 row_cells[3].text = str(row.get(col_aseg_n, ''))
                 row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
@@ -3122,9 +3126,25 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
                 fecha_c = row.get('_fecha_creacion')
                 row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+                row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
                 for j in range(1, len(headers_sp)):
                     if row_cells[j].paragraphs[0].runs:
                         row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+
+                # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
+                if dias_sp is None:
+                    fill_fila_sp = None
+                elif dias_sp <= 5:
+                    fill_fila_sp = 'C6EFCE'
+                elif dias_sp == 6:
+                    fill_fila_sp = 'FFEB9C'
+                else:
+                    fill_fila_sp = 'FFC7CE'
+
+                if fill_fila_sp:
+                    for celda in row_cells:
+                        shading_fila_sp = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_fila_sp))
+                        celda._tc.get_or_add_tcPr().append(shading_fila_sp)
             doc.add_paragraph('')
     else:
         doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
