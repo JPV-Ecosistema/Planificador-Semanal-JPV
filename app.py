@@ -67,6 +67,23 @@ def get_google_client():
         st.error(f"⚠️ Error crítico de conexión a Google Cloud: {e}")
     return None
 
+def con_reintento(func, intentos=3, espera_inicial=1.5):
+    """Ejecuta func() reintentando con backoff exponencial si Google responde 429 (cuota
+    excedida). Un hipo transitorio de cuota no debe dejar vacías pantallas que se recuperan
+    solas desde la nube (Base Maestra, planes semanales/mensuales) cuando el contenedor
+    despierta sin caché local."""
+    import time
+    espera = espera_inicial
+    for intento in range(intentos):
+        try:
+            return func()
+        except Exception as e:
+            if "429" in str(e) and intento < intentos - 1:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            raise
+
 def get_google_sheet():
     client = get_google_client()
     if client:
@@ -115,13 +132,16 @@ def load_master_base():
         client = get_google_client()
         if client:
             try:
-                doc = client.open_by_url(st.secrets["google_sheet_url"])
-                ws = doc.worksheet("Base_Maestra")
-                metadata = ws.row_values(1)
-                if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION":
+                def _leer():
+                    doc = client.open_by_url(st.secrets["google_sheet_url"])
+                    ws = doc.worksheet("Base_Maestra")
+                    metadata = ws.row_values(1)
+                    registros = ws.get_all_records(head=2) if len(metadata) >= 2 and metadata[0] == "FECHA_ACTUALIZACION" else None
+                    return metadata, registros
+                metadata, registros = con_reintento(_leer)
+                if registros is not None:
                     fecha_str = metadata[1]
-                    datos_crud = ws.get_all_records(head=2)
-                    df_local = pd.DataFrame(datos_crud)
+                    df_local = pd.DataFrame(registros)
                     datos_guardar = {"fecha": fecha_str, "data": df_local.to_dict(orient="records")}
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(datos_guardar, f, ensure_ascii=False)
@@ -272,7 +292,7 @@ def sync_from_cloud(filename, filepath):
     sheet = get_google_sheet()
     if sheet:
         try:
-            registros = sheet.get_all_records()
+            registros = con_reintento(lambda: sheet.get_all_records())
             for fila in registros:
                 if str(fila.get('Archivo', '')) == filename:
                     datos_json = json.loads(fila.get('JSON_Data', '[]'))
