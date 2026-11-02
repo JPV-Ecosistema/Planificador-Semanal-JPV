@@ -793,11 +793,16 @@ def vista_planificador(modo="Semanal"):
                                 with colC2:
                                     fecha_fin_act = st.date_input(f"Fecha Fin {i}:", value=fecha_default_planificacion, key=f"fecha_fin_{idx}_{i}")
 
-                                if accion_final.strip():
+                                if accion_final.strip() and fecha_fin_act < fecha_inicio_act:
+                                    st.warning(
+                                        f"⚠️ **Rango de fechas inválido en la actividad {i}:** "
+                                        f"Fecha Fin ({fecha_fin_act.strftime('%d/%m/%Y')}) es anterior a Fecha Inicio "
+                                        f"({fecha_inicio_act.strftime('%d/%m/%Y')}). Corrige el rango antes de guardar; "
+                                        f"esta actividad no se incluirá en el plan hasta que lo hagas."
+                                    )
+                                elif accion_final.strip():
                                     act_dates = []
                                     s_d, e_d = fecha_inicio_act, fecha_fin_act
-                                    if e_d < s_d:
-                                        s_d, e_d = e_d, s_d
                                     delta = (e_d - s_d).days
                                     for d in range(delta + 1):
                                         dt = s_d + timedelta(days=d)
