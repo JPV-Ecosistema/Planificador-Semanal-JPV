@@ -374,6 +374,30 @@ def save_plan_actualizado(filepath, data):
         except Exception as e:
             st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
 
+def load_observaciones_sin_preliminar():
+    """Carga las Observaciones (razón de no envío del Preliminar) guardadas por caso.
+
+    Persisten por N° de caso, no por semana/reporte: una vez escritas se recuerdan la
+    próxima vez que ese caso aparezca en el listado de 'Casos sin Informe Preliminar',
+    en cualquier semana, hasta que alguien las actualice o el caso consiga su Preliminar.
+    Devuelve un dict numero_caso -> {"observacion": str, "fecha_actualizacion": str}."""
+    filename = "observaciones_sin_preliminar.json"
+    filepath = os.path.join(PERSISTENCE_DIR, filename)
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                datos = json.load(f)
+                return datos if isinstance(datos, dict) else {}
+        except Exception:
+            return {}
+    datos = sync_from_cloud(filename, filepath)
+    return datos if isinstance(datos, dict) else {}
+
+def save_observaciones_sin_preliminar(datos):
+    filename = "observaciones_sin_preliminar.json"
+    filepath = os.path.join(PERSISTENCE_DIR, filename)
+    save_plan_actualizado(filepath, datos)
+
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
 # VERSIÓN: 2.4.4 (Candado Inteligente con Extensión por Feriados)
@@ -793,11 +817,16 @@ def vista_planificador(modo="Semanal"):
                                 with colC2:
                                     fecha_fin_act = st.date_input(f"Fecha Fin {i}:", value=fecha_default_planificacion, key=f"fecha_fin_{idx}_{i}")
 
-                                if accion_final.strip():
+                                if accion_final.strip() and fecha_fin_act < fecha_inicio_act:
+                                    st.warning(
+                                        f"⚠️ **Rango de fechas inválido en la actividad {i}:** "
+                                        f"Fecha Fin ({fecha_fin_act.strftime('%d/%m/%Y')}) es anterior a Fecha Inicio "
+                                        f"({fecha_inicio_act.strftime('%d/%m/%Y')}). Corrige el rango antes de guardar; "
+                                        f"esta actividad no se incluirá en el plan hasta que lo hagas."
+                                    )
+                                elif accion_final.strip():
                                     act_dates = []
                                     s_d, e_d = fecha_inicio_act, fecha_fin_act
-                                    if e_d < s_d:
-                                        s_d, e_d = e_d, s_d
                                     delta = (e_d - s_d).days
                                     for d in range(delta + 1):
                                         dt = s_d + timedelta(days=d)
@@ -3085,7 +3114,8 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     doc.add_heading('2. Casos sin Informe Preliminar', level=1)
     if not df_sin_preliminar.empty:
-        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación']
+        observaciones_sp = load_observaciones_sin_preliminar()
+        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Observaciones']
         doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más.').runs[0].font.italic = True
 
         # Las divisiones se ordenan por su caso más antiguo (no alfabéticamente),
@@ -3127,6 +3157,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 fecha_c = row.get('_fecha_creacion')
                 row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
                 row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
+                row_cells[8].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
                 for j in range(1, len(headers_sp)):
                     if row_cells[j].paragraphs[0].runs:
                         row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
@@ -4271,6 +4302,110 @@ def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
         st.success("Todos los casos vigentes cuentan con Informe Preliminar.")
 
 
+def renderizar_observaciones_sin_preliminar():
+    """Tabla editable de 'Casos sin Informe Preliminar' con una columna de Observaciones
+    (razón de no envío). Persiste por N° de caso (ver load/save_observaciones_sin_preliminar)
+    y alimenta la columna 'Observaciones' de la sección 2 del Reporte de Entregables Word."""
+    import pandas as pd
+    import pytz
+    import streamlit as st
+    from datetime import datetime
+
+    st.markdown("### 📝 Casos sin Informe Preliminar — Observaciones")
+    st.info("Indica la razón de no envío del Preliminar para cada caso. Queda guardada por N° de caso y aparecerá en el Reporte de Entregables (Word); se recuerda la próxima vez que el caso siga en este listado, hasta que se actualice o consiga su Preliminar.")
+
+    df_bm_obs = load_master_base()
+    if df_bm_obs is None or df_bm_obs.empty:
+        st.warning("No hay Base Maestra cargada para calcular esta sección.")
+        return
+
+    def _parsear_fecha_obs(val):
+        try:
+            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                return None
+            s = str(val).strip()
+            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                serial = int(float(s))
+                if 30000 < serial < 60000:
+                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                parsed = pd.to_datetime(s, errors='coerce')
+            else:
+                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
+            return parsed.date() if pd.notna(parsed) else None
+        except Exception:
+            return None
+
+    col_caso_obs = 'Número de caso' if 'Número de caso' in df_bm_obs.columns else df_bm_obs.columns[0]
+    col_nick_obs = 'Nickname' if 'Nickname' in df_bm_obs.columns else df_bm_obs.columns[2]
+    col_div_obs = 'División' if 'División' in df_bm_obs.columns else df_bm_obs.columns[3]
+    col_aj_obs = 'Ajustador senior' if 'Ajustador senior' in df_bm_obs.columns else df_bm_obs.columns[9]
+    col_aseg_obs = 'Asegurado' if 'Asegurado' in df_bm_obs.columns else df_bm_obs.columns[11]
+    col_estado_obs = 'Estado' if 'Estado' in df_bm_obs.columns else (df_bm_obs.columns[18] if len(df_bm_obs.columns) > 18 else None)
+    col_preliminar_obs = 'Informe inicial completado' if 'Informe inicial completado' in df_bm_obs.columns else (df_bm_obs.columns[44] if len(df_bm_obs.columns) > 44 else None)
+    col_asignacion_obs = 'Fecha de asignación' if 'Fecha de asignación' in df_bm_obs.columns else (df_bm_obs.columns[23] if len(df_bm_obs.columns) > 23 else None)
+
+    if col_estado_obs is None or col_preliminar_obs is None:
+        st.warning("La Base Maestra no tiene las columnas necesarias (Estado / Informe inicial completado).")
+        return
+
+    df_sp_obs = df_bm_obs[
+        (df_bm_obs[col_estado_obs].astype(str).str.strip().str.lower() != 'cerrado') &
+        (df_bm_obs[col_preliminar_obs].astype(str).str.strip().str.lower() != 'si')
+    ].copy()
+
+    if df_sp_obs.empty:
+        st.success("Todos los casos vigentes cuentan con Informe Preliminar.")
+        return
+
+    hoy_ref_obs = datetime.now(pytz.timezone('America/Santiago')).date()
+    if col_asignacion_obs is not None:
+        df_sp_obs['_dias_asignacion'] = df_sp_obs[col_asignacion_obs].apply(
+            lambda v: (hoy_ref_obs - _parsear_fecha_obs(v)).days if _parsear_fecha_obs(v) is not None else None
+        )
+    else:
+        df_sp_obs['_dias_asignacion'] = None
+
+    observaciones_guardadas = load_observaciones_sin_preliminar()
+    df_sp_obs['_caso_str'] = df_sp_obs[col_caso_obs].astype(str).str.strip()
+    df_sp_obs['Observación'] = df_sp_obs['_caso_str'].apply(
+        lambda c: observaciones_guardadas.get(c, {}).get('observacion', '')
+    )
+
+    tabla_obs = df_sp_obs[[col_aj_obs, '_caso_str', col_nick_obs, col_aseg_obs, col_div_obs, '_dias_asignacion', 'Observación']].copy()
+    tabla_obs.columns = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'División', 'Días desde Asignación', 'Observación']
+    tabla_obs = tabla_obs.sort_values(['División', 'N° Caso']).reset_index(drop=True)
+
+    tabla_obs_editada = st.data_editor(
+        tabla_obs,
+        column_config={
+            'Ajustador': st.column_config.TextColumn(disabled=True),
+            'N° Caso': st.column_config.TextColumn(disabled=True),
+            'Nickname': st.column_config.TextColumn(disabled=True),
+            'Asegurado': st.column_config.TextColumn(disabled=True),
+            'División': st.column_config.TextColumn(disabled=True),
+            'Días desde Asignación': st.column_config.NumberColumn(disabled=True),
+            'Observación': st.column_config.TextColumn('Observación (razón de no envío)', width='large'),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key="editor_obs_sin_preliminar"
+    )
+
+    if st.button("💾 Guardar Observaciones", key="btn_guardar_obs_sin_preliminar"):
+        fecha_guardado_obs = datetime.now(pytz.timezone('America/Santiago')).strftime("%Y-%m-%d %H:%M:%S")
+        for _, fila_obs in tabla_obs_editada.iterrows():
+            caso_obs = str(fila_obs['N° Caso']).strip()
+            texto_obs = str(fila_obs['Observación'] or '').strip()
+            if texto_obs:
+                observaciones_guardadas[caso_obs] = {"observacion": texto_obs, "fecha_actualizacion": fecha_guardado_obs}
+            elif caso_obs in observaciones_guardadas:
+                del observaciones_guardadas[caso_obs]
+        save_observaciones_sin_preliminar(observaciones_guardadas)
+        st.success("Observaciones guardadas.")
+        st.rerun()
+
+
 def vista_reportes():
     import streamlit as st
     import calendar
@@ -4387,6 +4522,8 @@ def vista_reportes():
 
     # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
     if week_id_obj in ("Semana Actual", "Semana Pasada"):
+        st.markdown("---")
+        renderizar_observaciones_sin_preliminar()
         st.markdown("---")
         if week_id_obj == "Semana Pasada":
             st.markdown("### 📄 Reporte de Entregables Ejecutados (Semana Pasada)")
