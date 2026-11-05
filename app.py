@@ -2834,7 +2834,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
-    # Carga silenciosa de Base Maestra para rescatar Corredora, Aseguradora y Fecha de Creación
+    # Carga silenciosa de Base Maestra para rescatar Corredora, Aseguradora, División y Fecha de Creación
     dict_maestro = {}
     dict_dias_asignacion = {}  # numero_caso -> días desde Fecha de asignación (hoy)
     df_bm = pd.DataFrame()
@@ -2850,9 +2850,30 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         dict_maestro[num] = {
                             'corredora': str(row.get('Corredora', '')).strip(),
                             'aseguradora': str(row.get('Compañía de seguros', '')).strip(),
+                            'division': str(row.get('División', '')).strip(),
                         }
         except Exception:
             pass
+
+    # --- ÁREAS: agrupación de más alto nivel sobre la División, usada para ordenar y
+    # subdividir tablas (Ingeniería primero, luego Equipo Móvil, el resto al final). Se
+    # clasifica por palabra clave para no depender de que el texto de División calce exacto.
+    ORDEN_AREAS = ['Ingeniería', 'Equipo Móvil', 'Otras / Sin Clasificar']
+
+    def clasificar_area(division_str):
+        d = str(division_str or '').lower()
+        if 'ingenier' in d:
+            return 'Ingeniería'
+        elif 'equipo móvil' in d or 'equipo movil' in d:
+            return 'Equipo Móvil'
+        return 'Otras / Sin Clasificar'
+
+    def indice_area(division_str):
+        return ORDEN_AREAS.index(clasificar_area(division_str))
+
+    def truncar_texto(texto, max_len=28):
+        s = str(texto or '').strip()
+        return s if len(s) <= max_len else s[:max_len - 1].rstrip() + '…'
 
     es_semana_futura = week_id_obj not in ('Semana Pasada', 'Mes Pasado')
     subtitulo_reporte = 'Entregables Planificados' if es_semana_futura else 'Entregables Ejecutados'
@@ -2887,6 +2908,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     df_informes['tipo_informe'] = df_informes['accion'].apply(clasificar_informe)
     df_informes = df_informes[df_informes['tipo_informe'].notna()].copy()
+    df_informes['_area'] = df_informes['numero_caso'].astype(str).str.strip().apply(
+        lambda n: clasificar_area(dict_maestro.get(n, {}).get('division', ''))
+    )
 
     secciones = [
         ('ActaInspeccion',     '3. Actas de Inspección',                                        '5B2C6F'),
@@ -2898,51 +2922,60 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
-    # --- CUADRO RESUMEN (conteo + UF por clasificación, al inicio del reporte) ---
-    doc.add_heading('Resumen de Entregables', level=1)
+    # --- CUADRO RESUMEN (conteo + UF por clasificación): General y por Área ---
     resumen_cols = ['Clasificación', 'Planificado — Cantidad', 'Planificado — Hon (UF)', 'Realizado — Cantidad', 'Realizado — Hon (UF)']
-    table_resumen = doc.add_table(rows=1, cols=len(resumen_cols))
-    table_resumen.style = 'Table Grid'
-    hdr_resumen = table_resumen.rows[0].cells
-    for i, col_name in enumerate(resumen_cols):
-        hdr_resumen[i].text = col_name
-        run = hdr_resumen[i].paragraphs[0].runs[0]
-        run.font.bold = True
-        run.font.color.rgb = RGBColor(255, 255, 255)
-        run.font.size = Pt(9)
-        shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
-        hdr_resumen[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-    for tipo, titulo_seccion, _color in secciones:
-        df_tipo_resumen = df_informes[df_informes['tipo_informe'] == tipo]
-        df_tipo_resumen = (
-            df_tipo_resumen.sort_values('estado_cumplimiento', ascending=False)
-                           .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
-        )
-        df_realizado_resumen = df_tipo_resumen[df_tipo_resumen['estado_cumplimiento'] == 'Realizado']
+    def construir_tabla_resumen(titulo, df_informes_scope):
+        doc.add_heading(titulo, level=2)
+        table_resumen = doc.add_table(rows=1, cols=len(resumen_cols))
+        table_resumen.style = 'Table Grid'
+        hdr_resumen = table_resumen.rows[0].cells
+        for i, col_name in enumerate(resumen_cols):
+            hdr_resumen[i].text = col_name
+            run = hdr_resumen[i].paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(8)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+            hdr_resumen[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-        n_planificado = len(df_tipo_resumen)
-        uf_planificado = df_tipo_resumen['honorarios_estimados'].sum()
-        n_realizado = len(df_realizado_resumen)
-        uf_realizado = df_realizado_resumen['honorarios_estimados'].sum()
+        for tipo, titulo_seccion, _color in secciones:
+            df_tipo_resumen = df_informes_scope[df_informes_scope['tipo_informe'] == tipo]
+            df_tipo_resumen = (
+                df_tipo_resumen.sort_values('estado_cumplimiento', ascending=False)
+                               .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
+            )
+            df_realizado_resumen = df_tipo_resumen[df_tipo_resumen['estado_cumplimiento'] == 'Realizado']
 
-        row_cells = table_resumen.add_row().cells
-        row_cells[0].text = titulo_seccion.split('. ', 1)[-1]
-        row_cells[1].text = str(n_planificado)
-        row_cells[2].text = f"{uf_planificado:,.2f}"
-        row_cells[3].text = str(n_realizado)
-        row_cells[4].text = f"{uf_realizado:,.2f}"
-        for j in range(len(resumen_cols)):
-            if row_cells[j].paragraphs[0].runs:
-                row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
-            if j > 0:
-                row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph('')
+            n_planificado = len(df_tipo_resumen)
+            uf_planificado = df_tipo_resumen['honorarios_estimados'].sum()
+            n_realizado = len(df_realizado_resumen)
+            uf_realizado = df_realizado_resumen['honorarios_estimados'].sum()
+
+            row_cells = table_resumen.add_row().cells
+            row_cells[0].text = titulo_seccion.split('. ', 1)[-1]
+            row_cells[1].text = str(n_planificado)
+            row_cells[2].text = f"{uf_planificado:,.2f}"
+            row_cells[3].text = str(n_realizado)
+            row_cells[4].text = f"{uf_realizado:,.2f}"
+            for j in range(len(resumen_cols)):
+                if row_cells[j].paragraphs[0].runs:
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+                if j > 0:
+                    row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph('')
+
+    doc.add_heading('Resumen de Entregables', level=1)
+    construir_tabla_resumen('Resumen Entregables General', df_informes)
+    construir_tabla_resumen('Resumen Entregables Ingeniería', df_informes[df_informes['_area'] == 'Ingeniería'])
+    construir_tabla_resumen('Resumen Entregables Equipo Móvil', df_informes[df_informes['_area'] == 'Equipo Móvil'])
+    if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
+        construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
     columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Honorarios (UF)']
 
     def agregar_tabla_entregables(doc, df_sub, color_header, mostrar_dias_asignacion=False):
-        cols_locales = columnas_tabla + (['Días desde Asignación'] if mostrar_dias_asignacion else [])
+        cols_locales = columnas_tabla + (['Días desde Asignación', 'Estado'] if mostrar_dias_asignacion else [])
         table = doc.add_table(rows=1, cols=len(cols_locales))
         table.style = 'Table Grid'
         hdr_cells = table.rows[0].cells
@@ -2951,7 +2984,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             run = hdr_cells[i].paragraphs[0].runs[0]
             run.font.bold = True
             run.font.color.rgb = RGBColor(255, 255, 255)
-            run.font.size = Pt(9)
+            run.font.size = Pt(8)
             shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_header))
             hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
@@ -2965,12 +2998,12 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             run_aj = row_cells[0].paragraphs[0].runs[0]
             run_aj.font.bold = True
             run_aj.font.color.rgb = RGBColor(0, 51, 102)
-            run_aj.font.size = Pt(9)
+            run_aj.font.size = Pt(8)
 
             row_cells[1].text = num_caso
-            row_cells[2].text = str(row.get('Nick Name', ''))
+            row_cells[2].text = truncar_texto(row.get('Nick Name', ''))
             row_cells[3].text = str(row.get('asegurado', ''))
-            row_cells[4].text = datos_m['corredora']
+            row_cells[4].text = truncar_texto(datos_m['corredora'])
             row_cells[5].text = datos_m['aseguradora']
 
             try:
@@ -2981,13 +3014,16 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
             for j in range(1, len(cols_locales)):
                 if row_cells[j].paragraphs[0].runs:
-                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
 
             if mostrar_dias_asignacion:
                 dias = dict_dias_asignacion.get(num_caso)
                 row_cells[7].text = str(dias) if dias is not None else 'N/D'
-                if row_cells[7].paragraphs[0].runs:
-                    row_cells[7].paragraphs[0].runs[0].font.size = Pt(9)
+                # Vencido por defecto: más de 7 días sin Preliminar.
+                row_cells[8].text = 'Vencido' if (dias is not None and dias > 7) else 'Pendiente'
+                for j in (7, 8):
+                    if row_cells[j].paragraphs[0].runs:
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
 
                 # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
                 if dias is None:
@@ -3054,9 +3090,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             if col_asignacion_n is not None:
                 hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
                 df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_creacion)
-                for _, _r in df_bm_n.iterrows():
-                    _num = str(_r.get(col_caso_n, '')).strip()
-                    _fa = _r.get('_fecha_asignacion')
+                # zip() en vez de .iterrows(): con .iterrows() pandas arma una Series por
+                # fila mezclando todas las columnas, y si '_fecha_asignacion' viene None en
+                # alguna fila junto con columnas numéricas, ese None se vuelve NaN (float) y
+                # "(hoy_ref - _fa)" revienta con TypeError.
+                for _num, _fa in zip(df_bm_n[col_caso_n].astype(str).str.strip(), df_bm_n['_fecha_asignacion']):
                     if _num and _fa is not None:
                         dict_dias_asignacion[_num] = (hoy_ref - _fa).days
 
@@ -3076,11 +3114,13 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
                 ].copy()
 
+    doc.add_page_break()
     doc.add_heading(f"1. Casos Nuevos {'del Mes' if tipo_periodo == 'Mensual' else 'de la Semana'}", level=1)
     if not df_casos_nuevos.empty:
         headers_cn = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Fecha de Creación']
 
-        for division in sorted(df_casos_nuevos['_division'].unique()):
+        orden_divisiones_cn = sorted(df_casos_nuevos['_division'].unique(), key=lambda d: (indice_area(d), d))
+        for division in orden_divisiones_cn:
             df_div = df_casos_nuevos[df_casos_nuevos['_division'] == division]
             doc.add_heading(f'{division} ({len(df_div)})', level=2)
 
@@ -3092,7 +3132,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 run = hdr_cells[i].paragraphs[0].runs[0]
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(255, 255, 255)
-                run.font.size = Pt(9)
+                run.font.size = Pt(8)
                 shading_elm = parse_xml(r'<w:shd {} w:fill="6C3483"/>'.format(nsdecls('w')))
                 hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
@@ -3102,30 +3142,37 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 run_aj = row_cells[0].paragraphs[0].runs[0]
                 run_aj.font.bold = True
                 run_aj.font.color.rgb = RGBColor(0, 51, 102)
-                run_aj.font.size = Pt(9)
+                run_aj.font.size = Pt(8)
                 row_cells[1].text = str(row.get(col_caso_n, ''))
-                row_cells[2].text = str(row.get(col_nick_n, ''))
+                row_cells[2].text = truncar_texto(row.get(col_nick_n, ''))
                 row_cells[3].text = str(row.get(col_aseg_n, ''))
-                row_cells[4].text = str(row.get(col_corr_n, ''))
+                row_cells[4].text = truncar_texto(row.get(col_corr_n, ''))
                 fecha_c = row.get('_fecha_creacion')
                 row_cells[5].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
                 for j in range(1, len(headers_cn)):
                     if row_cells[j].paragraphs[0].runs:
-                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
             doc.add_paragraph('')
     else:
         doc.add_paragraph('No se registraron casos nuevos en este período.')
     doc.add_paragraph('')
 
+    doc.add_page_break()
     doc.add_heading('2. Casos sin Informe Preliminar', level=1)
     if not df_sin_preliminar.empty:
         observaciones_sp = load_observaciones_sin_preliminar()
-        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Observaciones']
-        doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más.').runs[0].font.italic = True
+        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Estado Preliminar', 'Observaciones']
+        doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar.').runs[0].font.italic = True
 
-        # Las divisiones se ordenan por su caso más antiguo (no alfabéticamente),
+        # Las divisiones se agrupan por Área (Ingeniería, luego Equipo Móvil, luego el
+        # resto) y, dentro de cada Área, por su caso más antiguo (no alfabéticamente),
         # para que la sección se lea de más antiguo a más nuevo de principio a fin.
-        orden_divisiones = df_sin_preliminar.groupby('_division')['_fecha_creacion'].min().sort_values().index.tolist()
+        orden_divisiones = (
+            df_sin_preliminar.groupby('_division')['_fecha_creacion']
+            .apply(lambda s: min((d for d in s if d is not None), default=None))
+            .sort_values(na_position='last').index.tolist()
+        )
+        orden_divisiones.sort(key=lambda d: indice_area(d))
         for division in orden_divisiones:
             df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
             doc.add_heading(f'{division} ({len(df_div)})', level=2)
@@ -3138,11 +3185,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 run = hdr_cells[i].paragraphs[0].runs[0]
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(255, 255, 255)
-                run.font.size = Pt(9)
+                run.font.size = Pt(8)
                 shading_elm = parse_xml(r'<w:shd {} w:fill="C0392B"/>'.format(nsdecls('w')))
                 hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-            for _, row in df_div.sort_values('_fecha_creacion').iterrows():
+            for idx, row in df_div.sort_values('_fecha_creacion').iterrows():
                 num_caso_sp = str(row.get(col_caso_n, '')).strip()
                 dias_sp = dict_dias_asignacion.get(num_caso_sp)
 
@@ -3151,21 +3198,26 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 run_aj = row_cells[0].paragraphs[0].runs[0]
                 run_aj.font.bold = True
                 run_aj.font.color.rgb = RGBColor(0, 51, 102)
-                run_aj.font.size = Pt(9)
+                run_aj.font.size = Pt(8)
                 row_cells[1].text = num_caso_sp
-                row_cells[2].text = str(row.get(col_nick_n, ''))
+                row_cells[2].text = truncar_texto(row.get(col_nick_n, ''))
                 row_cells[3].text = str(row.get(col_aseg_n, ''))
                 row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
                 estado_txt = str(row.get(col_estado_n, '')) if col_estado_n else ''
                 subestado_txt = str(row.get(col_subestado_n, '')) if col_subestado_n else ''
                 row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
-                fecha_c = row.get('_fecha_creacion')
+                # .loc directo (no row.get): .iterrows() arma una Series por fila mezclando
+                # todas las columnas y puede convertir un '_fecha_creacion' None en NaN
+                # (float) si otras columnas de esa fila son numéricas.
+                fecha_c = df_div.loc[idx, '_fecha_creacion']
                 row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
                 row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
-                row_cells[8].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
+                # Vencido por defecto: más de 7 días sin Preliminar.
+                row_cells[8].text = 'Vencido' if (dias_sp is not None and dias_sp > 7) else 'Pendiente'
+                row_cells[9].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
                 for j in range(1, len(headers_sp)):
                     if row_cells[j].paragraphs[0].runs:
-                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
 
                 # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
                 if dias_sp is None:
@@ -3193,6 +3245,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             continue
 
         hay_datos = True
+        doc.add_page_break()
         doc.add_heading(titulo_seccion, level=1)
 
         # Un mismo caso+acción puede tener varias filas (ej. rango de fechas de
@@ -3203,24 +3256,32 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                    .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
         )
 
-        df_entregados    = df_tipo_dedup[df_tipo_dedup['estado_cumplimiento'] == 'Realizado']
-        df_no_entregados = df_tipo_dedup[df_tipo_dedup['estado_cumplimiento'] != 'Realizado']
+        # Área primero (Ingeniería, luego Equipo Móvil, luego el resto); dentro de
+        # cada Área, Entregados y No Entregados — así quedan todas las tablas de
+        # Ingeniería juntas y después todas las de Equipo Móvil.
+        areas_presentes = [a for a in ORDEN_AREAS if (df_tipo_dedup['_area'] == a).any()]
+        for area in areas_presentes:
+            df_area = df_tipo_dedup[df_tipo_dedup['_area'] == area]
+            doc.add_heading(area, level=2)
 
-        doc.add_heading(f'Entregados ({len(df_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
-        if not df_entregados.empty:
-            agregar_tabla_entregables(doc, df_entregados, color)
-        else:
-            doc.add_paragraph('Sin entregables realizados en este período.')
-        doc.add_paragraph('')
+            df_entregados    = df_area[df_area['estado_cumplimiento'] == 'Realizado']
+            df_no_entregados = df_area[df_area['estado_cumplimiento'] != 'Realizado']
 
-        doc.add_heading(f'No Entregados ({len(df_no_entregados.drop_duplicates(subset=["Ajustador","numero_caso","accion"]))})', level=2)
-        if not df_no_entregados.empty:
-            if tipo == 'Preliminar':
-                doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más.').runs[0].font.italic = True
-            agregar_tabla_entregables(doc, df_no_entregados, 'D9534F', mostrar_dias_asignacion=(tipo == 'Preliminar'))
-        else:
-            doc.add_paragraph('Todos los entregables de esta categoría fueron realizados.')
-        doc.add_paragraph('')
+            doc.add_heading(f'Entregados ({len(df_entregados)})', level=3)
+            if not df_entregados.empty:
+                agregar_tabla_entregables(doc, df_entregados, color)
+            else:
+                doc.add_paragraph('Sin entregables realizados en este período.')
+            doc.add_paragraph('')
+
+            doc.add_heading(f'No Entregados ({len(df_no_entregados)})', level=3)
+            if not df_no_entregados.empty:
+                if tipo == 'Preliminar':
+                    doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar.').runs[0].font.italic = True
+                agregar_tabla_entregables(doc, df_no_entregados, 'D9534F', mostrar_dias_asignacion=(tipo == 'Preliminar'))
+            else:
+                doc.add_paragraph('Todos los entregables de esta categoría fueron realizados.')
+            doc.add_paragraph('')
 
     if not hay_datos:
         doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
@@ -4238,9 +4299,8 @@ def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
     if col_asignacion is not None:
         hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
         df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion].apply(parsear_fecha_creacion_mes)
-        for _, r in df_bm_n.iterrows():
-            num = str(r.get(col_caso, '')).strip()
-            fa = r.get('_fecha_asignacion')
+        # zip() en vez de .iterrows(): ver nota equivalente en generar_reporte_entregables_word.
+        for num, fa in zip(df_bm_n[col_caso].astype(str).str.strip(), df_bm_n['_fecha_asignacion']):
             if num and fa is not None:
                 dict_dias_asignacion[num] = (hoy_ref - fa).days
 
