@@ -2898,9 +2898,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
     ]
 
-    # --- CUADRO RESUMEN (conteo por clasificación, al inicio del reporte) ---
+    # --- CUADRO RESUMEN (conteo + UF por clasificación, al inicio del reporte) ---
     doc.add_heading('Resumen de Entregables', level=1)
-    resumen_cols = ['Clasificación', 'Entregados', 'No Entregados', 'Total']
+    resumen_cols = ['Clasificación', 'Planificado — Cantidad', 'Planificado — Hon (UF)', 'Realizado — Cantidad', 'Realizado — Hon (UF)']
     table_resumen = doc.add_table(rows=1, cols=len(resumen_cols))
     table_resumen.style = 'Table Grid'
     hdr_resumen = table_resumen.rows[0].cells
@@ -2919,14 +2919,19 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             df_tipo_resumen.sort_values('estado_cumplimiento', ascending=False)
                            .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
         )
-        n_entregados = int((df_tipo_resumen['estado_cumplimiento'] == 'Realizado').sum())
-        n_no_entregados = int((df_tipo_resumen['estado_cumplimiento'] != 'Realizado').sum())
+        df_realizado_resumen = df_tipo_resumen[df_tipo_resumen['estado_cumplimiento'] == 'Realizado']
+
+        n_planificado = len(df_tipo_resumen)
+        uf_planificado = df_tipo_resumen['honorarios_estimados'].sum()
+        n_realizado = len(df_realizado_resumen)
+        uf_realizado = df_realizado_resumen['honorarios_estimados'].sum()
 
         row_cells = table_resumen.add_row().cells
         row_cells[0].text = titulo_seccion.split('. ', 1)[-1]
-        row_cells[1].text = str(n_entregados)
-        row_cells[2].text = str(n_no_entregados)
-        row_cells[3].text = str(n_entregados + n_no_entregados)
+        row_cells[1].text = str(n_planificado)
+        row_cells[2].text = f"{uf_planificado:,.2f}"
+        row_cells[3].text = str(n_realizado)
+        row_cells[4].text = f"{uf_realizado:,.2f}"
         for j in range(len(resumen_cols)):
             if row_cells[j].paragraphs[0].runs:
                 row_cells[j].paragraphs[0].runs[0].font.size = Pt(9)
@@ -4049,25 +4054,26 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
             df_tipo.sort_values('estado_cumplimiento', ascending=False)
                    .drop_duplicates(subset=['Ajustador', 'numero_caso', 'accion'], keep='first')
         )
-        n_entregados = int((df_tipo_dedup['estado_cumplimiento'] == 'Realizado').sum())
-        n_no_entregados = int((df_tipo_dedup['estado_cumplimiento'] != 'Realizado').sum())
+        df_realizado_tipo = df_tipo_dedup[df_tipo_dedup['estado_cumplimiento'] == 'Realizado']
         filas.append({
             'Clasificación': tipo,
-            'Entregados': n_entregados,
-            'No Entregados': n_no_entregados,
-            'Total': n_entregados + n_no_entregados,
+            'Planificado — Cantidad': len(df_tipo_dedup),
+            'Planificado — Hon (UF)': round(float(df_tipo_dedup['honorarios_estimados'].sum()), 2),
+            'Realizado — Cantidad': len(df_realizado_tipo),
+            'Realizado — Hon (UF)': round(float(df_realizado_tipo['honorarios_estimados'].sum()), 2),
         })
 
     df_resumen = pd.DataFrame(filas)
 
-    if df_resumen['Total'].sum() == 0:
+    if df_resumen['Planificado — Cantidad'].sum() == 0:
         st.warning(f"No se registraron entregables clasificables para «{mes_opcion}».")
         return
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Entregados", int(df_resumen['Entregados'].sum()))
-    c2.metric("Total No Entregados", int(df_resumen['No Entregados'].sum()))
-    c3.metric("Total General", int(df_resumen['Total'].sum()))
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cantidad Planificada", int(df_resumen['Planificado — Cantidad'].sum()))
+    c2.metric("UF Planificada", f"{df_resumen['Planificado — Hon (UF)'].sum():,.2f}")
+    c3.metric("Cantidad Realizada", int(df_resumen['Realizado — Cantidad'].sum()))
+    c4.metric("UF Realizada", f"{df_resumen['Realizado — Hon (UF)'].sum():,.2f}")
 
     st.dataframe(df_resumen, use_container_width=True, hide_index=True)
 
