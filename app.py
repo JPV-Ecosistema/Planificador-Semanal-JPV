@@ -2822,7 +2822,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
 # BLOQUE 4.6: REPORTE DE ENTREGABLES SEMANA PASADA (WORD)
 # VERSIÓN: 1.0.0
 # ---------------------------------------------------------
-def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=None):
+def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=None, tipo_periodo="Semanal"):
     import io
     import os
     import json
@@ -2854,7 +2854,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         except Exception:
             pass
 
-    es_semana_futura = week_id_obj not in ('Semana Pasada',)
+    es_semana_futura = week_id_obj not in ('Semana Pasada', 'Mes Pasado')
     subtitulo_reporte = 'Entregables Planificados' if es_semana_futura else 'Entregables Ejecutados'
 
     doc = Document()
@@ -3071,7 +3071,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
                 ].copy()
 
-    doc.add_heading('1. Casos Nuevos de la Semana', level=1)
+    doc.add_heading(f"1. Casos Nuevos {'del Mes' if tipo_periodo == 'Mensual' else 'de la Semana'}", level=1)
     if not df_casos_nuevos.empty:
         headers_cn = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Fecha de Creación']
 
@@ -4482,6 +4482,31 @@ def vista_reportes():
                     except Exception as e:
                         st.error(f"Error al generar el reporte: {e}")
 
+        # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
+        if week_id_obj in ("Semana Actual", "Semana Pasada"):
+            st.markdown("---")
+            renderizar_observaciones_sin_preliminar()
+            st.markdown("---")
+            if week_id_obj == "Semana Pasada":
+                st.markdown("### 📄 Reporte de Entregables Ejecutados (Semana Pasada)")
+                st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+            else:
+                st.markdown("### 📄 Reporte de Entregables Planificados (Semana Actual)")
+                st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
+            if st.button("📥 Generar Reporte de Entregables (WORD)", type="primary", use_container_width=True, key="btn_gen_entregables_semanal"):
+                try:
+                    word_bytes = generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target, tipo_periodo="Semanal")
+                    st.download_button(
+                        label="⬇️ Descargar Reporte de Entregables",
+                        data=word_bytes,
+                        file_name=f"Reporte_Entregables_{target_week_id}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        key="dl_entregables_semanal"
+                    )
+                except Exception as e:
+                    st.error(f"Error al generar el reporte: {e}")
+
     with tab_mensual:
         col_radio_m, col_btn_m = st.columns([2, 1])
         with col_radio_m:
@@ -4520,26 +4545,24 @@ def vista_reportes():
         st.markdown("---")
         renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion)
 
-    # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
-    if week_id_obj in ("Semana Actual", "Semana Pasada"):
+        # --- REPORTE DE ENTREGABLES DEL MES (WORD) ---
         st.markdown("---")
-        renderizar_observaciones_sin_preliminar()
-        st.markdown("---")
-        if week_id_obj == "Semana Pasada":
-            st.markdown("### 📄 Reporte de Entregables Ejecutados (Semana Pasada)")
-            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+        if mes_opcion == "Mes Pasado":
+            st.markdown("### 📄 Reporte de Entregables Ejecutados (Mes Pasado)")
+            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos durante el mes, separados por estado de cumplimiento.")
         else:
-            st.markdown("### 📄 Reporte de Entregables Planificados (Semana Actual)")
-            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
-        if st.button("📥 Generar Reporte de Entregables (WORD)", type="primary", use_container_width=True):
+            st.markdown("### 📄 Reporte de Entregables Planificados (Mes Actual)")
+            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para este mes, separados por estado de cumplimiento a la fecha.")
+        if st.button("📥 Generar Reporte de Entregables del Mes (WORD)", type="primary", use_container_width=True, key="btn_gen_entregables_mensual"):
             try:
-                word_bytes = generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target)
+                word_bytes_mes = generar_reporte_entregables_word(df_mes, mes_opcion, dias_mes_target, tipo_periodo="Mensual")
                 st.download_button(
-                    label="⬇️ Descargar Reporte de Entregables",
-                    data=word_bytes,
-                    file_name=f"Reporte_Entregables_{target_week_id}.docx",
+                    label="⬇️ Descargar Reporte de Entregables del Mes",
+                    data=word_bytes_mes,
+                    file_name=f"Reporte_Entregables_Mensual_{target_month_id}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary"
+                    type="primary",
+                    key="dl_entregables_mensual"
                 )
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
