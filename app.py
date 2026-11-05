@@ -2923,21 +2923,30 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     ]
 
     # --- CUADRO RESUMEN (conteo + UF por clasificación): General y por Área ---
-    resumen_cols = ['Clasificación', 'Planificado — Cantidad', 'Planificado — Hon (UF)', 'Realizado — Cantidad', 'Realizado — Hon (UF)']
-
     def construir_tabla_resumen(titulo, df_informes_scope):
         doc.add_heading(titulo, level=2)
-        table_resumen = doc.add_table(rows=1, cols=len(resumen_cols))
+        table_resumen = doc.add_table(rows=2, cols=5)
         table_resumen.style = 'Table Grid'
-        hdr_resumen = table_resumen.rows[0].cells
-        for i, col_name in enumerate(resumen_cols):
-            hdr_resumen[i].text = col_name
-            run = hdr_resumen[i].paragraphs[0].runs[0]
+
+        def _estilizar_header(cell, texto):
+            cell.text = texto
+            run = cell.paragraphs[0].runs[0]
             run.font.bold = True
             run.font.color.rgb = RGBColor(255, 255, 255)
             run.font.size = Pt(8)
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
             shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
-            hdr_resumen[i]._tc.get_or_add_tcPr().append(shading_elm)
+            cell._tc.get_or_add_tcPr().append(shading_elm)
+
+        # Encabezado combinado: "Clasificación" ocupa ambas filas; "Planificado" y
+        # "Realizado" son título de columna, con "Cantidad"/"Hon (UF)" como subcolumna.
+        _estilizar_header(table_resumen.cell(0, 0).merge(table_resumen.cell(1, 0)), 'Clasificación')
+        _estilizar_header(table_resumen.cell(0, 1).merge(table_resumen.cell(0, 2)), 'Planificado')
+        _estilizar_header(table_resumen.cell(0, 3).merge(table_resumen.cell(0, 4)), 'Realizado')
+        _estilizar_header(table_resumen.cell(1, 1), 'Cantidad')
+        _estilizar_header(table_resumen.cell(1, 2), 'Hon (UF)')
+        _estilizar_header(table_resumen.cell(1, 3), 'Cantidad')
+        _estilizar_header(table_resumen.cell(1, 4), 'Hon (UF)')
 
         for tipo, titulo_seccion, _color in secciones:
             df_tipo_resumen = df_informes_scope[df_informes_scope['tipo_informe'] == tipo]
@@ -2958,7 +2967,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             row_cells[2].text = f"{uf_planificado:,.2f}"
             row_cells[3].text = str(n_realizado)
             row_cells[4].text = f"{uf_realizado:,.2f}"
-            for j in range(len(resumen_cols)):
+            for j in range(5):
                 if row_cells[j].paragraphs[0].runs:
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
                 if j > 0:
@@ -3157,86 +3166,87 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         doc.add_paragraph('No se registraron casos nuevos en este período.')
     doc.add_paragraph('')
 
-    doc.add_page_break()
-    doc.add_heading('2. Casos sin Informe Preliminar', level=1)
-    if not df_sin_preliminar.empty:
-        observaciones_sp = load_observaciones_sin_preliminar()
-        headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Estado Preliminar', 'Observaciones']
-        doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar.').runs[0].font.italic = True
+    if tipo_periodo != "Mensual":
+        doc.add_page_break()
+        doc.add_heading('2. Casos sin Informe Preliminar', level=1)
+        if not df_sin_preliminar.empty:
+            observaciones_sp = load_observaciones_sin_preliminar()
+            headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Estado Preliminar', 'Observaciones']
+            doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar.').runs[0].font.italic = True
 
-        # Las divisiones se agrupan por Área (Ingeniería, luego Equipo Móvil, luego el
-        # resto) y, dentro de cada Área, por su caso más antiguo (no alfabéticamente),
-        # para que la sección se lea de más antiguo a más nuevo de principio a fin.
-        orden_divisiones = (
-            df_sin_preliminar.groupby('_division')['_fecha_creacion']
-            .apply(lambda s: min((d for d in s if d is not None), default=None))
-            .sort_values(na_position='last').index.tolist()
-        )
-        orden_divisiones.sort(key=lambda d: indice_area(d))
-        for division in orden_divisiones:
-            df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
-            doc.add_heading(f'{division} ({len(df_div)})', level=2)
+            # Las divisiones se agrupan por Área (Ingeniería, luego Equipo Móvil, luego el
+            # resto) y, dentro de cada Área, por su caso más antiguo (no alfabéticamente),
+            # para que la sección se lea de más antiguo a más nuevo de principio a fin.
+            orden_divisiones = (
+                df_sin_preliminar.groupby('_division')['_fecha_creacion']
+                .apply(lambda s: min((d for d in s if d is not None), default=None))
+                .sort_values(na_position='last').index.tolist()
+            )
+            orden_divisiones.sort(key=lambda d: indice_area(d))
+            for division in orden_divisiones:
+                df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
+                doc.add_heading(f'{division} ({len(df_div)})', level=2)
 
-            table_sp = doc.add_table(rows=1, cols=len(headers_sp))
-            table_sp.style = 'Table Grid'
-            hdr_cells = table_sp.rows[0].cells
-            for i, col_name in enumerate(headers_sp):
-                hdr_cells[i].text = col_name
-                run = hdr_cells[i].paragraphs[0].runs[0]
-                run.font.bold = True
-                run.font.color.rgb = RGBColor(255, 255, 255)
-                run.font.size = Pt(8)
-                shading_elm = parse_xml(r'<w:shd {} w:fill="C0392B"/>'.format(nsdecls('w')))
-                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                table_sp = doc.add_table(rows=1, cols=len(headers_sp))
+                table_sp.style = 'Table Grid'
+                hdr_cells = table_sp.rows[0].cells
+                for i, col_name in enumerate(headers_sp):
+                    hdr_cells[i].text = col_name
+                    run = hdr_cells[i].paragraphs[0].runs[0]
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+                    run.font.size = Pt(8)
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="C0392B"/>'.format(nsdecls('w')))
+                    hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-            for idx, row in df_div.sort_values('_fecha_creacion').iterrows():
-                num_caso_sp = str(row.get(col_caso_n, '')).strip()
-                dias_sp = dict_dias_asignacion.get(num_caso_sp)
+                for idx, row in df_div.sort_values('_fecha_creacion').iterrows():
+                    num_caso_sp = str(row.get(col_caso_n, '')).strip()
+                    dias_sp = dict_dias_asignacion.get(num_caso_sp)
 
-                row_cells = table_sp.add_row().cells
-                row_cells[0].text = str(row.get(col_aj_n, ''))
-                run_aj = row_cells[0].paragraphs[0].runs[0]
-                run_aj.font.bold = True
-                run_aj.font.color.rgb = RGBColor(0, 51, 102)
-                run_aj.font.size = Pt(8)
-                row_cells[1].text = num_caso_sp
-                row_cells[2].text = truncar_texto(row.get(col_nick_n, ''))
-                row_cells[3].text = str(row.get(col_aseg_n, ''))
-                row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
-                estado_txt = str(row.get(col_estado_n, '')) if col_estado_n else ''
-                subestado_txt = str(row.get(col_subestado_n, '')) if col_subestado_n else ''
-                row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
-                # .loc directo (no row.get): .iterrows() arma una Series por fila mezclando
-                # todas las columnas y puede convertir un '_fecha_creacion' None en NaN
-                # (float) si otras columnas de esa fila son numéricas.
-                fecha_c = df_div.loc[idx, '_fecha_creacion']
-                row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
-                row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
-                # Vencido por defecto: más de 7 días sin Preliminar.
-                row_cells[8].text = 'Vencido' if (dias_sp is not None and dias_sp > 7) else 'Pendiente'
-                row_cells[9].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
-                for j in range(1, len(headers_sp)):
-                    if row_cells[j].paragraphs[0].runs:
-                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+                    row_cells = table_sp.add_row().cells
+                    row_cells[0].text = str(row.get(col_aj_n, ''))
+                    run_aj = row_cells[0].paragraphs[0].runs[0]
+                    run_aj.font.bold = True
+                    run_aj.font.color.rgb = RGBColor(0, 51, 102)
+                    run_aj.font.size = Pt(8)
+                    row_cells[1].text = num_caso_sp
+                    row_cells[2].text = truncar_texto(row.get(col_nick_n, ''))
+                    row_cells[3].text = str(row.get(col_aseg_n, ''))
+                    row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
+                    estado_txt = str(row.get(col_estado_n, '')) if col_estado_n else ''
+                    subestado_txt = str(row.get(col_subestado_n, '')) if col_subestado_n else ''
+                    row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
+                    # .loc directo (no row.get): .iterrows() arma una Series por fila mezclando
+                    # todas las columnas y puede convertir un '_fecha_creacion' None en NaN
+                    # (float) si otras columnas de esa fila son numéricas.
+                    fecha_c = df_div.loc[idx, '_fecha_creacion']
+                    row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+                    row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
+                    # Vencido por defecto: más de 7 días sin Preliminar.
+                    row_cells[8].text = 'Vencido' if (dias_sp is not None and dias_sp > 7) else 'Pendiente'
+                    row_cells[9].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
+                    for j in range(1, len(headers_sp)):
+                        if row_cells[j].paragraphs[0].runs:
+                            row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
 
-                # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
-                if dias_sp is None:
-                    fill_fila_sp = None
-                elif dias_sp <= 5:
-                    fill_fila_sp = 'C6EFCE'
-                elif dias_sp == 6:
-                    fill_fila_sp = 'FFEB9C'
-                else:
-                    fill_fila_sp = 'FFC7CE'
+                    # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
+                    if dias_sp is None:
+                        fill_fila_sp = None
+                    elif dias_sp <= 5:
+                        fill_fila_sp = 'C6EFCE'
+                    elif dias_sp == 6:
+                        fill_fila_sp = 'FFEB9C'
+                    else:
+                        fill_fila_sp = 'FFC7CE'
 
-                if fill_fila_sp:
-                    for celda in row_cells:
-                        shading_fila_sp = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_fila_sp))
-                        celda._tc.get_or_add_tcPr().append(shading_fila_sp)
-            doc.add_paragraph('')
-    else:
-        doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
-    doc.add_paragraph('')
+                    if fill_fila_sp:
+                        for celda in row_cells:
+                            shading_fila_sp = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_fila_sp))
+                            celda._tc.get_or_add_tcPr().append(shading_fila_sp)
+                doc.add_paragraph('')
+        else:
+            doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
+        doc.add_paragraph('')
 
     hay_datos = False
     for tipo, titulo_seccion, color in secciones:
@@ -4136,7 +4146,16 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
     c3.metric("Cantidad Realizada", int(df_resumen['Realizado — Cantidad'].sum()))
     c4.metric("UF Realizada", f"{df_resumen['Realizado — Hon (UF)'].sum():,.2f}")
 
-    st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+    # Encabezado combinado: Planificado/Realizado como título, Cantidad/Hon (UF) como subcolumna.
+    df_resumen_mostrar = df_resumen.copy()
+    df_resumen_mostrar.columns = pd.MultiIndex.from_tuples([
+        ('', 'Clasificación'),
+        ('Planificado', 'Cantidad'),
+        ('Planificado', 'Hon (UF)'),
+        ('Realizado', 'Cantidad'),
+        ('Realizado', 'Hon (UF)'),
+    ])
+    st.dataframe(df_resumen_mostrar, use_container_width=True, hide_index=True)
 
 
 def renderizar_reporte_mensual_facturacion(df_mes, mes_opcion):
