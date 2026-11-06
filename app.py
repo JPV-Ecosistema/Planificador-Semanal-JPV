@@ -2944,18 +2944,20 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
     secciones = [
         ('ActaInspeccion',     '3. Actas de Inspección',                                        '5B2C6F'),
-        ('IFL',                '4. Informes Finales de Liquidación',                            '003366'),
-        ('Rechazo',            '5. Cartas de Cobertura (Rechazo)',                               '8B0000'),
-        ('AnalisisPerdidas',   '6. Cartas de Análisis de Pérdidas',                              'B9770E'),
-        ('Intermedio',         '7. Informes Intermedios',                                        '004A99'),
-        ('Preliminar',         '8. Informes Preliminares',                                       '217346'),
+        ('Ajuste',             '4. Ajustes',                                                     'A04000'),
+        ('IFL',                '5. Informes Finales de Liquidación',                            '003366'),
+        ('Rechazo',            '6. Cartas de Cobertura (Rechazo)',                               '8B0000'),
+        ('AnalisisPerdidas',   '7. Cartas de Análisis de Pérdidas',                              'B9770E'),
+        ('Intermedio',         '8. Informes Intermedios',                                        '004A99'),
         ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
-        ('Ajuste',             '10. Ajustes',                                                     'A04000'),
     ]
 
     # --- CUADRO RESUMEN (conteo + UF por clasificación): General y por Área ---
     def construir_tabla_resumen(titulo, df_informes_scope):
-        doc.add_heading(titulo, level=2)
+        heading_resumen = doc.add_heading(titulo, level=2)
+        for run in heading_resumen.runs:
+            run.font.color.rgb = RGBColor(0, 51, 102)
+            run.font.bold = True
         table_resumen = doc.add_table(rows=2, cols=5)
         table_resumen.style = 'Table Grid'
 
@@ -3006,11 +3008,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         doc.add_paragraph('')
 
     doc.add_heading('Resumen de Entregables', level=1)
-    construir_tabla_resumen('Resumen Entregables General', df_informes)
-    construir_tabla_resumen('Resumen Entregables Ingeniería', df_informes[df_informes['_area'] == 'Ingeniería'])
-    construir_tabla_resumen('Resumen Entregables Equipo Móvil', df_informes[df_informes['_area'] == 'Equipo Móvil'])
+    construir_tabla_resumen('General', df_informes)
+    construir_tabla_resumen('Ingeniería', df_informes[df_informes['_area'] == 'Ingeniería'])
+    construir_tabla_resumen('Equipo Móvil', df_informes[df_informes['_area'] == 'Equipo Móvil'])
     if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
-        construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
+        construir_tabla_resumen('Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
@@ -3082,7 +3084,6 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             if n_stock == 0:
                 continue
             agregar_fila_gauges(titulo_area, n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf)
-        doc.add_paragraph('')
 
     etiqueta_periodo_cob = 'del Mes' if tipo_periodo == 'Mensual' else 'de la Semana'
     agregar_seccion_cobertura_stock(
@@ -3282,7 +3283,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             doc.add_paragraph('')
     else:
         doc.add_paragraph('No se registraron casos nuevos en este período.')
-    doc.add_paragraph('')
+        doc.add_paragraph('')
 
     if tipo_periodo != "Mensual":
         doc.add_page_break()
@@ -3364,7 +3365,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 doc.add_paragraph('')
         else:
             doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
-        doc.add_paragraph('')
+            doc.add_paragraph('')
 
     hay_datos = False
     for tipo, titulo_seccion, color in secciones:
@@ -3404,14 +3405,26 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
             doc.add_heading(f'No Entregados ({len(df_no_entregados)})', level=3)
             if not df_no_entregados.empty:
-                if tipo == 'Preliminar':
-                    doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar.').runs[0].font.italic = True
-                agregar_tabla_entregables(doc, df_no_entregados, 'D9534F', mostrar_dias_asignacion=(tipo == 'Preliminar'))
+                agregar_tabla_entregables(doc, df_no_entregados, 'D9534F')
             else:
                 doc.add_paragraph('Todos los entregables de esta categoría fueron realizados.')
             doc.add_paragraph('')
 
     if not hay_datos:
+        doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
+
+    # --- CARGA DE TRABAJO POR AJUSTADOR: mismo esquema del Resumen de Entregables
+    # (Planificado/Realizado, Cantidad + Hon UF, por cada tipo de informe), pero
+    # segmentado por Ajustador en vez de por Área. ---
+    doc.add_page_break()
+    doc.add_heading('10. Carga de Trabajo por Ajustador', level=1)
+    ajustadores_presentes = sorted(
+        a for a in df_informes['Ajustador'].astype(str).str.strip().unique() if a
+    )
+    if ajustadores_presentes:
+        for ajustador in ajustadores_presentes:
+            construir_tabla_resumen(ajustador, df_informes[df_informes['Ajustador'] == ajustador])
+    else:
         doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
 
     buffer = io.BytesIO()
@@ -4230,13 +4243,12 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
 
     orden_tipos = [
         'Actas de Inspección',
+        'Ajustes',
         'Informes Finales de Liquidación',
         'Cartas de Cobertura (Rechazo)',
         'Cartas de Análisis de Pérdidas',
         'Informes Intermedios',
-        'Informes Preliminares',
         'Respuestas a Impugnación / Adendum',
-        'Ajustes',
     ]
 
     filas = []
