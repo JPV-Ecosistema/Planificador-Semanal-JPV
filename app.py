@@ -2918,7 +2918,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     # Clasificar por tipo de informe
     def clasificar_informe(accion):
         a = str(accion).lower()
-        if 'acta de inspección' in a:
+        if 'en ajuste - revisión de cobertura' in a:
+            return 'Ajuste'
+        elif 'acta de inspección' in a:
             return 'ActaInspeccion'
         elif 'informe final de liquidación' in a:
             return 'IFL'
@@ -2948,6 +2950,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         ('Intermedio',         '7. Informes Intermedios',                                        '004A99'),
         ('Preliminar',         '8. Informes Preliminares',                                       '217346'),
         ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('Ajuste',             '10. Ajustes',                                                     'A04000'),
     ]
 
     # --- CUADRO RESUMEN (conteo + UF por clasificación): General y por Área ---
@@ -3009,76 +3012,92 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
         construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
-    # --- COBERTURA DE PLANIFICACIÓN DEL MES (IFL) — solo primera hoja del reporte mensual ---
+    # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
-    # este mes para Informe Final de Liquidación, en cantidad de casos y en Hon (UF).
-    if tipo_periodo == "Mensual":
-        doc.add_heading('Cobertura de Planificación del Mes — Informes Finales de Liquidación (IFL)', level=1)
-        doc.add_paragraph(
-            'Del stock total de casos vigentes (no Cerrados) de la Base Maestra, cuánto se está '
-            'planificando este mes para Informe Final de Liquidación.'
-        ).runs[0].font.italic = True
+    # en el período para un tipo de informe dado, en cantidad de casos y en Hon (UF).
+    def agregar_seccion_cobertura_stock(titulo_seccion_cob, descripcion_cob, tipo_filtro_cob):
+        doc.add_heading(titulo_seccion_cob, level=1)
+        doc.add_paragraph(descripcion_cob).runs[0].font.italic = True
 
         if df_bm.empty:
             doc.add_paragraph('No hay Base Maestra cargada para calcular esta sección.')
-        else:
-            col_estado_stock = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
-            col_div_stock = 'División' if 'División' in df_bm.columns else (df_bm.columns[3] if len(df_bm.columns) > 3 else None)
+            doc.add_paragraph('')
+            return
 
-            if col_estado_stock is None:
-                doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
+        col_estado_stock = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+        col_div_stock = 'División' if 'División' in df_bm.columns else (df_bm.columns[3] if len(df_bm.columns) > 3 else None)
+
+        if col_estado_stock is None:
+            doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
+            doc.add_paragraph('')
+            return
+
+        df_vigentes = df_bm[df_bm[col_estado_stock].astype(str).str.strip().str.lower() != 'cerrado'].copy()
+        df_vigentes['_hon_uf'] = df_vigentes.iloc[:, 66].apply(limpiar_monto_mcl) if df_vigentes.shape[1] > 66 else 0.0
+        df_vigentes['_area_stock'] = (
+            df_vigentes[col_div_stock].apply(clasificar_area) if col_div_stock is not None else 'Otras / Sin Clasificar'
+        )
+
+        df_tipo_planificado = df_informes[df_informes['tipo_informe'] == tipo_filtro_cob]
+        df_tipo_planificado = (
+            df_tipo_planificado.sort_values('estado_cumplimiento', ascending=False)
+                                .drop_duplicates(subset=['numero_caso'], keep='first')
+        )
+
+        def _metricas_cobertura(area_filtro):
+            if area_filtro is None:
+                df_stock_scope = df_vigentes
+                df_planif_scope = df_tipo_planificado
             else:
-                df_vigentes = df_bm[df_bm[col_estado_stock].astype(str).str.strip().str.lower() != 'cerrado'].copy()
-                df_vigentes['_hon_uf'] = df_vigentes.iloc[:, 66].apply(limpiar_monto_mcl) if df_vigentes.shape[1] > 66 else 0.0
-                df_vigentes['_area_stock'] = (
-                    df_vigentes[col_div_stock].apply(clasificar_area) if col_div_stock is not None else 'Otras / Sin Clasificar'
-                )
+                df_stock_scope = df_vigentes[df_vigentes['_area_stock'] == area_filtro]
+                df_planif_scope = df_tipo_planificado[df_tipo_planificado['_area'] == area_filtro]
+            n_stock = len(df_stock_scope)
+            uf_stock = float(df_stock_scope['_hon_uf'].sum())
+            n_planif = len(df_planif_scope)
+            uf_planif = float(df_planif_scope['honorarios_estimados'].sum())
+            pct_cant = (n_planif / n_stock * 100) if n_stock > 0 else 0.0
+            pct_uf = (uf_planif / uf_stock * 100) if uf_stock > 0 else 0.0
+            return n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf
 
-                df_ifl_planificado = df_informes[df_informes['tipo_informe'] == 'IFL']
-                df_ifl_planificado = (
-                    df_ifl_planificado.sort_values('estado_cumplimiento', ascending=False)
-                                       .drop_duplicates(subset=['numero_caso'], keep='first')
-                )
+        def agregar_fila_gauges(titulo_area, n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf):
+            doc.add_heading(titulo_area, level=2)
+            tabla_g = doc.add_table(rows=1, cols=2)
+            for idx, (pct, etiqueta) in enumerate([(pct_cant, 'Cobertura Cantidad'), (pct_uf, 'Cobertura Hon (UF)')]):
+                celda = tabla_g.rows[0].cells[idx]
+                img_buf = crear_gauge_imagen(pct, etiqueta)
+                celda.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                celda.paragraphs[0].add_run().add_picture(img_buf, width=Cm(6))
+            p_detalle = doc.add_paragraph()
+            p_detalle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_detalle = p_detalle.add_run(
+                f"Cantidad: {n_planif} de {n_stock} casos vigentes   ·   "
+                f"Honorarios: {uf_planif:,.2f} / {uf_stock:,.2f} UF"
+            )
+            run_detalle.font.size = Pt(9)
+            run_detalle.font.color.rgb = RGBColor(90, 90, 90)
+            doc.add_paragraph('')
 
-                def _metricas_cobertura(area_filtro):
-                    if area_filtro is None:
-                        df_stock_scope = df_vigentes
-                        df_planif_scope = df_ifl_planificado
-                    else:
-                        df_stock_scope = df_vigentes[df_vigentes['_area_stock'] == area_filtro]
-                        df_planif_scope = df_ifl_planificado[df_ifl_planificado['_area'] == area_filtro]
-                    n_stock = len(df_stock_scope)
-                    uf_stock = float(df_stock_scope['_hon_uf'].sum())
-                    n_planif = len(df_planif_scope)
-                    uf_planif = float(df_planif_scope['honorarios_estimados'].sum())
-                    pct_cant = (n_planif / n_stock * 100) if n_stock > 0 else 0.0
-                    pct_uf = (uf_planif / uf_stock * 100) if uf_stock > 0 else 0.0
-                    return n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf
-
-                def agregar_fila_gauges(titulo_area, n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf):
-                    doc.add_heading(titulo_area, level=2)
-                    tabla_g = doc.add_table(rows=1, cols=2)
-                    for idx, (pct, etiqueta) in enumerate([(pct_cant, 'Cobertura Cantidad'), (pct_uf, 'Cobertura Hon (UF)')]):
-                        celda = tabla_g.rows[0].cells[idx]
-                        img_buf = crear_gauge_imagen(pct, etiqueta)
-                        celda.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        celda.paragraphs[0].add_run().add_picture(img_buf, width=Cm(6))
-                    p_detalle = doc.add_paragraph()
-                    p_detalle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    run_detalle = p_detalle.add_run(
-                        f"Cantidad: {n_planif} de {n_stock} casos vigentes   ·   "
-                        f"Honorarios: {uf_planif:,.2f} / {uf_stock:,.2f} UF"
-                    )
-                    run_detalle.font.size = Pt(9)
-                    run_detalle.font.color.rgb = RGBColor(90, 90, 90)
-                    doc.add_paragraph('')
-
-                for titulo_area, area_filtro in [('General', None), ('Ingeniería', 'Ingeniería'), ('Equipo Móvil', 'Equipo Móvil')]:
-                    n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf = _metricas_cobertura(area_filtro)
-                    if n_stock == 0:
-                        continue
-                    agregar_fila_gauges(titulo_area, n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf)
+        for titulo_area, area_filtro in [('General', None), ('Ingeniería', 'Ingeniería'), ('Equipo Móvil', 'Equipo Móvil')]:
+            n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf = _metricas_cobertura(area_filtro)
+            if n_stock == 0:
+                continue
+            agregar_fila_gauges(titulo_area, n_stock, uf_stock, n_planif, uf_planif, pct_cant, pct_uf)
         doc.add_paragraph('')
+
+    etiqueta_periodo_cob = 'del Mes' if tipo_periodo == 'Mensual' else 'de la Semana'
+    agregar_seccion_cobertura_stock(
+        f'Cobertura de Planificación {etiqueta_periodo_cob} — Ajustes',
+        f'Del stock total de casos vigentes (no Cerrados) de la Base Maestra, cuánto se está '
+        f'planificando {"este mes" if tipo_periodo == "Mensual" else "esta semana"} para Ajuste (revisión de cobertura).',
+        'Ajuste'
+    )
+    if tipo_periodo == "Mensual":
+        agregar_seccion_cobertura_stock(
+            'Cobertura de Planificación del Mes — Informes Finales de Liquidación (IFL)',
+            'Del stock total de casos vigentes (no Cerrados) de la Base Maestra, cuánto se está '
+            'planificando este mes para Informe Final de Liquidación.',
+            'IFL'
+        )
 
     columnas_tabla = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Corredora', 'Compañía de Seguros', 'Honorarios (UF)']
 
@@ -4188,7 +4207,9 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
 
     def clasificar_informe(accion):
         a = str(accion).lower()
-        if 'acta de inspección' in a:
+        if 'en ajuste - revisión de cobertura' in a:
+            return 'Ajustes'
+        elif 'acta de inspección' in a:
             return 'Actas de Inspección'
         elif 'informe final de liquidación' in a:
             return 'Informes Finales de Liquidación'
@@ -4215,6 +4236,7 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
         'Informes Intermedios',
         'Informes Preliminares',
         'Respuestas a Impugnación / Adendum',
+        'Ajustes',
     ]
 
     filas = []
