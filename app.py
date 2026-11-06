@@ -3007,12 +3007,11 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.add_paragraph('')
 
-    doc.add_heading('Resumen de Entregables', level=1)
-    construir_tabla_resumen('General', df_informes)
-    construir_tabla_resumen('Ingeniería', df_informes[df_informes['_area'] == 'Ingeniería'])
-    construir_tabla_resumen('Equipo Móvil', df_informes[df_informes['_area'] == 'Equipo Móvil'])
+    construir_tabla_resumen('Resumen Entregables General', df_informes)
+    construir_tabla_resumen('Resumen Entregables Ingeniería', df_informes[df_informes['_area'] == 'Ingeniería'])
+    construir_tabla_resumen('Resumen Entregables Equipo Móvil', df_informes[df_informes['_area'] == 'Equipo Móvil'])
     if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
-        construir_tabla_resumen('Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
+        construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
