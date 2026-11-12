@@ -3013,6 +3013,81 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
         construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
+    # --- DISTRIBUCIÓN DE ETAPAS DEL PIPELINE — stock vigente completo, no depende
+    # del período del reporte. "Etapa del Caso" la gestiona JPV Pipeline (hoja
+    # Pipeline_Backup del Google Sheet compartido); acá es sólo lectura. ---
+    doc.add_heading('Distribución de Etapas del Pipeline', level=1)
+    if df_bm.empty:
+        doc.add_paragraph('No hay Base Maestra cargada para calcular esta sección.')
+        doc.add_paragraph('')
+    else:
+        col_estado_etapa = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+        col_div_etapa = 'División' if 'División' in df_bm.columns else (df_bm.columns[3] if len(df_bm.columns) > 3 else None)
+        col_caso_etapa = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+
+        if col_estado_etapa is None:
+            doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
+            doc.add_paragraph('')
+        else:
+            etapas_pipeline = cargar_etapas_pipeline()
+            df_vigentes_etapa = df_bm[df_bm[col_estado_etapa].astype(str).str.strip().str.lower() != 'cerrado'].copy()
+            df_vigentes_etapa['_hon_uf'] = df_vigentes_etapa.iloc[:, 66].apply(limpiar_monto_mcl) if df_vigentes_etapa.shape[1] > 66 else 0.0
+            df_vigentes_etapa['_area_etapa'] = (
+                df_vigentes_etapa[col_div_etapa].apply(clasificar_area) if col_div_etapa is not None else 'Otras / Sin Clasificar'
+            )
+            df_vigentes_etapa['_etapa'] = df_vigentes_etapa[col_caso_etapa].astype(str).str.strip().apply(
+                lambda n: etapas_pipeline.get(n, 'Sin Etapa Registrada') or 'Sin Etapa Registrada'
+            )
+
+            def construir_tabla_etapas(titulo_etapa, df_scope_etapa):
+                heading_etapa = doc.add_heading(titulo_etapa, level=2)
+                for run in heading_etapa.runs:
+                    run.font.color.rgb = RGBColor(0, 51, 102)
+                    run.font.bold = True
+
+                if df_scope_etapa.empty:
+                    doc.add_paragraph('Sin casos vigentes en este alcance.')
+                    doc.add_paragraph('')
+                    return
+
+                total_casos = len(df_scope_etapa)
+                df_agrupado = (
+                    df_scope_etapa.groupby('_etapa')
+                    .agg(cantidad=('_etapa', 'size'), hon_uf=('_hon_uf', 'sum'))
+                    .sort_values('cantidad', ascending=False)
+                    .reset_index()
+                )
+
+                table_etapa = doc.add_table(rows=1, cols=4)
+                table_etapa.style = 'Table Grid'
+                hdr_cells = table_etapa.rows[0].cells
+                for i, col_name in enumerate(['Etapa', 'Cantidad', '%', 'Hon (UF)']):
+                    hdr_cells[i].text = col_name
+                    run = hdr_cells[i].paragraphs[0].runs[0]
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+                    run.font.size = Pt(8)
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+                    hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+                for _, fila_etapa in df_agrupado.iterrows():
+                    row_cells = table_etapa.add_row().cells
+                    row_cells[0].text = str(fila_etapa['_etapa'])
+                    row_cells[1].text = str(int(fila_etapa['cantidad']))
+                    pct = (fila_etapa['cantidad'] / total_casos * 100) if total_casos > 0 else 0.0
+                    row_cells[2].text = f"{pct:.1f}%"
+                    row_cells[3].text = f"{fila_etapa['hon_uf']:,.2f}"
+                    for j in range(4):
+                        if row_cells[j].paragraphs[0].runs:
+                            row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+                        if j > 0:
+                            row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                doc.add_paragraph('')
+
+            construir_tabla_etapas('General', df_vigentes_etapa)
+            construir_tabla_etapas('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'])
+            construir_tabla_etapas('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'])
+
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
     # en el período para un tipo de informe dado, en cantidad de casos y en Hon (UF).
