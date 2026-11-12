@@ -3442,8 +3442,9 @@ def generar_reporte_preliminares_pendientes_word():
     import pandas as pd
     import pytz
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, Inches, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.section import WD_ORIENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
@@ -3495,6 +3496,17 @@ def generar_reporte_preliminares_pendientes_word():
 
     doc = Document()
     agregar_logo_word(doc)
+
+    # Horizontal: con 11 columnas en la tabla, el ancho de una página vertical
+    # deja los datos demasiado apretados.
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    section.left_margin   = Inches(0.5)
+    section.right_margin  = Inches(0.5)
+    section.top_margin    = Inches(0.6)
+    section.bottom_margin = Inches(0.6)
+
     doc.add_heading('Reporte de Preliminares Pendientes', 0)
     doc.add_paragraph(f'Generado el: {hoy.strftime("%d/%m/%Y")} | Casos vigentes sin Informe Preliminar completado.').runs[0].font.italic = True
 
@@ -3565,6 +3577,8 @@ def generar_reporte_preliminares_pendientes_word():
 
     observaciones_sp = load_observaciones_sin_preliminar()
     headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Estado Preliminar', 'Fecha de Inspección', 'Observaciones']
+    # Anchos en pulgadas (total ~9.0" usable en horizontal con márgenes 0.5")
+    col_widths_sp = [0.9, 0.6, 0.8, 0.9, 0.8, 0.9, 0.7, 0.6, 0.7, 0.8, 1.3]
     doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar. Fecha de Inspección: verde y negrita si ya fue realizada, rojo si está agendada o si aún no se agenda.').runs[0].font.italic = True
 
     orden_divisiones = (
@@ -3582,6 +3596,7 @@ def generar_reporte_preliminares_pendientes_word():
         hdr_cells = table_sp.rows[0].cells
         for i, col_name in enumerate(headers_sp):
             hdr_cells[i].text = col_name
+            hdr_cells[i].width = Inches(col_widths_sp[i])
             run = hdr_cells[i].paragraphs[0].runs[0]
             run.font.bold = True
             run.font.color.rgb = RGBColor(255, 255, 255)
@@ -3594,6 +3609,8 @@ def generar_reporte_preliminares_pendientes_word():
             dias_sp = dict_dias_asignacion.get(num_caso_sp)
 
             row_cells = table_sp.add_row().cells
+            for i in range(len(headers_sp)):
+                row_cells[i].width = Inches(col_widths_sp[i])
             row_cells[0].text = str(row.get(col_aj_n, ''))
             run_aj = row_cells[0].paragraphs[0].runs[0]
             run_aj.font.bold = True
