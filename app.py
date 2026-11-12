@@ -3432,6 +3432,222 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
 
 # ---------------------------------------------------------
+# BLOQUE 4.6.1: REPORTE DE PRELIMINARES PENDIENTES (WORD)
+# VERSIÓN: 1.0.0
+# ---------------------------------------------------------
+def generar_reporte_preliminares_pendientes_word():
+    import io
+    import os
+    import json
+    import pandas as pd
+    import pytz
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
+
+    ORDEN_AREAS = ['Ingeniería', 'Equipo Móvil', 'Otras / Sin Clasificar']
+
+    def clasificar_area(division_str):
+        d = str(division_str or '').lower()
+        if 'ingenier' in d:
+            return 'Ingeniería'
+        elif 'equipo móvil' in d or 'equipo movil' in d:
+            return 'Equipo Móvil'
+        return 'Otras / Sin Clasificar'
+
+    def indice_area(division_str):
+        return ORDEN_AREAS.index(clasificar_area(division_str))
+
+    def truncar_texto(texto, max_len=28):
+        s = str(texto or '').strip()
+        return s if len(s) <= max_len else s[:max_len - 1].rstrip() + '…'
+
+    def parsear_fecha_creacion(val):
+        try:
+            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+                return None
+            s = str(val).strip()
+            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+                serial = int(float(s))
+                if 30000 < serial < 60000:  # rango razonable de fechas Excel
+                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+                parsed = pd.to_datetime(s, errors='coerce')
+            else:
+                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
+            return parsed.date() if pd.notna(parsed) else None
+        except Exception:
+            return None
+
+    df_bm = pd.DataFrame()
+    filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
+    if os.path.exists(filepath_bm):
+        try:
+            with open(filepath_bm, 'r', encoding='utf-8') as f:
+                datos_bm = json.load(f)
+                df_bm = pd.DataFrame(datos_bm['data'])
+        except Exception:
+            pass
+
+    hoy = datetime.now(pytz.timezone('America/Santiago')).date()
+
+    doc = Document()
+    agregar_logo_word(doc)
+    doc.add_heading('Reporte de Preliminares Pendientes', 0)
+    doc.add_paragraph(f'Generado el: {hoy.strftime("%d/%m/%Y")} | Casos vigentes sin Informe Preliminar completado.').runs[0].font.italic = True
+
+    if df_bm.empty:
+        doc.add_paragraph('No hay Base Maestra cargada para generar este reporte.')
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        return buffer.getvalue()
+
+    col_caso_n   = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+    col_div_n    = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
+    col_nick_n   = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
+    col_aj_n     = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else df_bm.columns[9]
+    col_aseg_n   = 'Asegurado' if 'Asegurado' in df_bm.columns else df_bm.columns[11]
+    col_creado   = 'Creado en' if 'Creado en' in df_bm.columns else (df_bm.columns[20] if len(df_bm.columns) > 20 else None)
+    col_estado_n = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+    col_subestado_n   = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
+    col_aseguradora_n = 'Compañía de seguros' if 'Compañía de seguros' in df_bm.columns else (df_bm.columns[6] if len(df_bm.columns) > 6 else None)
+    col_preliminar_n  = 'Informe inicial completado' if 'Informe inicial completado' in df_bm.columns else (df_bm.columns[44] if len(df_bm.columns) > 44 else None)
+    col_asignacion_n  = 'Fecha de asignación' if 'Fecha de asignación' in df_bm.columns else (df_bm.columns[23] if len(df_bm.columns) > 23 else None)
+    # Columnas de inspección (reporte de acciones): AI=Fecha agendada, AJ=Fecha de
+    # inspección, AL=Inspección completada (letras de columna del Excel origen).
+    col_fecha_agendada_n  = 'Fecha agendada' if 'Fecha agendada' in df_bm.columns else (df_bm.columns[34] if len(df_bm.columns) > 34 else None)
+    col_fecha_inspeccion_n = 'Fecha de inspección' if 'Fecha de inspección' in df_bm.columns else (df_bm.columns[35] if len(df_bm.columns) > 35 else None)
+    col_insp_completada_n  = 'Inspección completada' if 'Inspección completada' in df_bm.columns else (df_bm.columns[37] if len(df_bm.columns) > 37 else None)
+
+    if col_creado is None or col_estado_n is None or col_preliminar_n is None:
+        doc.add_paragraph('La Base Maestra no tiene las columnas necesarias (Creado en / Estado / Informe inicial completado).')
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        return buffer.getvalue()
+
+    df_bm_n = df_bm.copy()
+    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
+    df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
+
+    dict_dias_asignacion = {}
+    if col_asignacion_n is not None:
+        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_creacion)
+        for _num, _fa in zip(df_bm_n[col_caso_n].astype(str).str.strip(), df_bm_n['_fecha_asignacion']):
+            if _num and _fa is not None:
+                dict_dias_asignacion[_num] = (hoy - _fa).days
+
+    df_sin_preliminar = df_bm_n[
+        (df_bm_n[col_estado_n].astype(str).str.strip().str.lower() != 'cerrado') &
+        (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
+    ].copy()
+
+    def resolver_inspeccion(row):
+        completada = (
+            col_insp_completada_n is not None and
+            str(row.get(col_insp_completada_n, '')).strip().lower() in ('si', 'sí')
+        )
+        if completada:
+            fecha = parsear_fecha_creacion(row.get(col_fecha_inspeccion_n)) if col_fecha_inspeccion_n else None
+            texto = fecha.strftime('%d/%m/%Y') if fecha else 'Sin fecha'
+            return texto, True
+        fecha_agendada = parsear_fecha_creacion(row.get(col_fecha_agendada_n)) if col_fecha_agendada_n else None
+        if fecha_agendada:
+            return fecha_agendada.strftime('%d/%m/%Y'), False
+        return 'Sin agendar', False
+
+    if df_sin_preliminar.empty:
+        doc.add_paragraph('Todos los casos vigentes cuentan con Informe Preliminar.')
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        return buffer.getvalue()
+
+    observaciones_sp = load_observaciones_sin_preliminar()
+    headers_sp = ['Ajustador', 'N° Caso', 'Nickname', 'Asegurado', 'Aseguradora', 'Estado / Sub-estado', 'Fecha de Creación', 'Días desde Asignación', 'Estado Preliminar', 'Fecha de Inspección', 'Observaciones']
+    doc.add_paragraph('Color según días desde la fecha de asignación: Verde = 0-5 días · Amarillo = 6 días · Rojo = 7 días o más. Vencido = más de 7 días sin Preliminar. Fecha de Inspección: verde y negrita si ya fue realizada, rojo si está agendada o si aún no se agenda.').runs[0].font.italic = True
+
+    orden_divisiones = (
+        df_sin_preliminar.groupby('_division')['_fecha_creacion']
+        .apply(lambda s: min((d for d in s if d is not None), default=None))
+        .sort_values(na_position='last').index.tolist()
+    )
+    orden_divisiones.sort(key=lambda d: indice_area(d))
+    for division in orden_divisiones:
+        df_div = df_sin_preliminar[df_sin_preliminar['_division'] == division]
+        doc.add_heading(f'{division} ({len(df_div)})', level=2)
+
+        table_sp = doc.add_table(rows=1, cols=len(headers_sp))
+        table_sp.style = 'Table Grid'
+        hdr_cells = table_sp.rows[0].cells
+        for i, col_name in enumerate(headers_sp):
+            hdr_cells[i].text = col_name
+            run = hdr_cells[i].paragraphs[0].runs[0]
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            run.font.size = Pt(8)
+            shading_elm = parse_xml(r'<w:shd {} w:fill="C0392B"/>'.format(nsdecls('w')))
+            hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        for idx, row in df_div.sort_values('_fecha_creacion').iterrows():
+            num_caso_sp = str(row.get(col_caso_n, '')).strip()
+            dias_sp = dict_dias_asignacion.get(num_caso_sp)
+
+            row_cells = table_sp.add_row().cells
+            row_cells[0].text = str(row.get(col_aj_n, ''))
+            run_aj = row_cells[0].paragraphs[0].runs[0]
+            run_aj.font.bold = True
+            run_aj.font.color.rgb = RGBColor(0, 51, 102)
+            run_aj.font.size = Pt(8)
+            row_cells[1].text = num_caso_sp
+            row_cells[2].text = truncar_texto(row.get(col_nick_n, ''))
+            row_cells[3].text = str(row.get(col_aseg_n, ''))
+            row_cells[4].text = str(row.get(col_aseguradora_n, '')) if col_aseguradora_n else ''
+            estado_txt = str(row.get(col_estado_n, '')) if col_estado_n else ''
+            subestado_txt = str(row.get(col_subestado_n, '')) if col_subestado_n else ''
+            row_cells[5].text = f"{estado_txt} / {subestado_txt}" if subestado_txt else estado_txt
+            # .loc directo (no row.get): .iterrows() arma una Series por fila mezclando
+            # todas las columnas y puede convertir un '_fecha_creacion' None en NaN
+            # (float) si otras columnas de esa fila son numéricas.
+            fecha_c = df_div.loc[idx, '_fecha_creacion']
+            row_cells[6].text = fecha_c.strftime('%d/%m/%Y') if fecha_c else ''
+            row_cells[7].text = str(dias_sp) if dias_sp is not None else 'N/D'
+            # Vencido por defecto: más de 7 días sin Preliminar.
+            row_cells[8].text = 'Vencido' if (dias_sp is not None and dias_sp > 7) else 'Pendiente'
+
+            texto_insp, insp_realizada = resolver_inspeccion(row)
+            row_cells[9].text = texto_insp
+            run_insp = row_cells[9].paragraphs[0].runs[0]
+            run_insp.font.color.rgb = RGBColor(0x21, 0x73, 0x46) if insp_realizada else RGBColor(0xD9, 0x53, 0x4F)
+            run_insp.font.bold = insp_realizada
+
+            row_cells[10].text = observaciones_sp.get(num_caso_sp, {}).get('observacion', '')
+            for j in range(1, len(headers_sp)):
+                if row_cells[j].paragraphs[0].runs:
+                    row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+
+            # Verde: 0-5 días | Amarillo: 6 días | Rojo: 7+ días
+            if dias_sp is None:
+                fill_fila_sp = None
+            elif dias_sp <= 5:
+                fill_fila_sp = 'C6EFCE'
+            elif dias_sp == 6:
+                fill_fila_sp = 'FFEB9C'
+            else:
+                fill_fila_sp = 'FFC7CE'
+
+            if fill_fila_sp:
+                for celda in row_cells:
+                    shading_fila_sp = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_fila_sp))
+                    celda._tc.get_or_add_tcPr().append(shading_fila_sp)
+        doc.add_paragraph('')
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+# ---------------------------------------------------------
 # BLOQUE 4.7: REPORTE DE CASOS SIN MOVIMIENTO (WORD)
 # VERSIÓN: 1.0.0
 # ---------------------------------------------------------
@@ -4724,6 +4940,22 @@ def vista_reportes():
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
+            st.markdown("### 📋 Reporte de Preliminares Pendientes")
+            st.info("Genera un documento Word solo con los casos vigentes sin Informe Preliminar completado, incluyendo la fecha de inspección (agendada o realizada).")
+            if st.button("📥 Generar Reporte de Preliminares Pendientes (WORD)", type="primary", use_container_width=True, key="btn_gen_preliminares_semanal"):
+                try:
+                    word_bytes_prelim = generar_reporte_preliminares_pendientes_word()
+                    st.download_button(
+                        label="⬇️ Descargar Reporte de Preliminares Pendientes",
+                        data=word_bytes_prelim,
+                        file_name=f"Reporte_Preliminares_Pendientes_{target_week_id}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        key="dl_preliminares_semanal"
+                    )
+                except Exception as e:
+                    st.error(f"Error al generar el reporte: {e}")
+
     with tab_mensual:
         col_radio_m, col_btn_m = st.columns([2, 1])
         with col_radio_m:
@@ -4780,6 +5012,22 @@ def vista_reportes():
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     type="primary",
                     key="dl_entregables_mensual"
+                )
+            except Exception as e:
+                st.error(f"Error al generar el reporte: {e}")
+
+        st.markdown("### 📋 Reporte de Preliminares Pendientes")
+        st.info("Genera un documento Word solo con los casos vigentes sin Informe Preliminar completado, incluyendo la fecha de inspección (agendada o realizada).")
+        if st.button("📥 Generar Reporte de Preliminares Pendientes (WORD)", type="primary", use_container_width=True, key="btn_gen_preliminares_mensual"):
+            try:
+                word_bytes_prelim_mes = generar_reporte_preliminares_pendientes_word()
+                st.download_button(
+                    label="⬇️ Descargar Reporte de Preliminares Pendientes",
+                    data=word_bytes_prelim_mes,
+                    file_name=f"Reporte_Preliminares_Pendientes_{target_month_id}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary",
+                    key="dl_preliminares_mensual"
                 )
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
