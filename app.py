@@ -3039,29 +3039,29 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 lambda n: etapas_pipeline.get(n, 'Sin Etapa Registrada') or 'Sin Etapa Registrada'
             )
 
-            def construir_tabla_etapas(titulo_etapa, df_scope_etapa):
-                heading_etapa = doc.add_heading(titulo_etapa, level=2)
+            def construir_tabla_distribucion(titulo_scope, df_scope, columna_grupo, etiqueta_columna):
+                heading_etapa = doc.add_heading(titulo_scope, level=2)
                 for run in heading_etapa.runs:
                     run.font.color.rgb = RGBColor(0, 51, 102)
                     run.font.bold = True
 
-                if df_scope_etapa.empty:
+                if df_scope.empty:
                     doc.add_paragraph('Sin casos vigentes en este alcance.')
                     doc.add_paragraph('')
                     return
 
-                total_casos = len(df_scope_etapa)
+                total_casos = len(df_scope)
                 df_agrupado = (
-                    df_scope_etapa.groupby('_etapa')
-                    .agg(cantidad=('_etapa', 'size'), hon_uf=('_hon_uf', 'sum'))
+                    df_scope.groupby(columna_grupo)
+                    .agg(cantidad=(columna_grupo, 'size'), hon_uf=('_hon_uf', 'sum'))
                     .sort_values('cantidad', ascending=False)
                     .reset_index()
                 )
 
-                table_etapa = doc.add_table(rows=1, cols=4)
-                table_etapa.style = 'Table Grid'
-                hdr_cells = table_etapa.rows[0].cells
-                for i, col_name in enumerate(['Etapa', 'Cantidad', '%', 'Hon (UF)']):
+                table_dist = doc.add_table(rows=1, cols=4)
+                table_dist.style = 'Table Grid'
+                hdr_cells = table_dist.rows[0].cells
+                for i, col_name in enumerate([etiqueta_columna, 'Cantidad', '%', 'Hon (UF)']):
                     hdr_cells[i].text = col_name
                     run = hdr_cells[i].paragraphs[0].runs[0]
                     run.font.bold = True
@@ -3070,13 +3070,13 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
                     hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
 
-                for _, fila_etapa in df_agrupado.iterrows():
-                    row_cells = table_etapa.add_row().cells
-                    row_cells[0].text = str(fila_etapa['_etapa'])
-                    row_cells[1].text = str(int(fila_etapa['cantidad']))
-                    pct = (fila_etapa['cantidad'] / total_casos * 100) if total_casos > 0 else 0.0
+                for _, fila_dist in df_agrupado.iterrows():
+                    row_cells = table_dist.add_row().cells
+                    row_cells[0].text = str(fila_dist[columna_grupo])
+                    row_cells[1].text = str(int(fila_dist['cantidad']))
+                    pct = (fila_dist['cantidad'] / total_casos * 100) if total_casos > 0 else 0.0
                     row_cells[2].text = f"{pct:.1f}%"
-                    row_cells[3].text = f"{fila_etapa['hon_uf']:,.2f}"
+                    row_cells[3].text = f"{fila_dist['hon_uf']:,.2f}"
                     for j in range(4):
                         if row_cells[j].paragraphs[0].runs:
                             row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
@@ -3084,9 +3084,32 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                             row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 doc.add_paragraph('')
 
-            construir_tabla_etapas('General', df_vigentes_etapa)
-            construir_tabla_etapas('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'])
-            construir_tabla_etapas('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'])
+            construir_tabla_distribucion('General', df_vigentes_etapa, '_etapa', 'Etapa')
+            construir_tabla_distribucion('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'], '_etapa', 'Etapa')
+            construir_tabla_distribucion('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'], '_etapa', 'Etapa')
+
+    # --- DISTRIBUCIÓN DE ESTADO DEL STOCK — mismo stock vigente, pero según el
+    # Estado / Sub-estado interno de la Base Maestra (no la Etapa de Pipeline). ---
+    doc.add_heading('Distribución de Estado del Stock', level=1)
+    if df_bm.empty:
+        doc.add_paragraph('No hay Base Maestra cargada para calcular esta sección.')
+        doc.add_paragraph('')
+    elif col_estado_etapa is None:
+        doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
+        doc.add_paragraph('')
+    else:
+        col_subestado_etapa = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
+
+        def _etiqueta_estado_sub(fila):
+            est = str(fila.get(col_estado_etapa, '') or '').strip() or 'Sin Estado'
+            sub = str(fila.get(col_subestado_etapa, '') or '').strip() if col_subestado_etapa else ''
+            return f"{est} — {sub}" if sub else est
+
+        df_vigentes_etapa['_estado_sub'] = df_vigentes_etapa.apply(_etiqueta_estado_sub, axis=1)
+
+        construir_tabla_distribucion('General', df_vigentes_etapa, '_estado_sub', 'Estado / Sub-estado')
+        construir_tabla_distribucion('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'], '_estado_sub', 'Estado / Sub-estado')
+        construir_tabla_distribucion('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'], '_estado_sub', 'Estado / Sub-estado')
 
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
