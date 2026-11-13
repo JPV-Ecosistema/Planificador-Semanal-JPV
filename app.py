@@ -3039,7 +3039,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 lambda n: etapas_pipeline.get(n, 'Sin Etapa Registrada') or 'Sin Etapa Registrada'
             )
 
-            def construir_tabla_distribucion(titulo_scope, df_scope, columna_grupo, etiqueta_columna):
+            def construir_tabla_distribucion(titulo_scope, df_scope, columna_grupo, etiqueta_columna, orden_explicito=None):
                 heading_etapa = doc.add_heading(titulo_scope, level=2)
                 for run in heading_etapa.runs:
                     run.font.color.rgb = RGBColor(0, 51, 102)
@@ -3054,9 +3054,17 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 df_agrupado = (
                     df_scope.groupby(columna_grupo)
                     .agg(cantidad=(columna_grupo, 'size'), hon_uf=('_hon_uf', 'sum'))
-                    .sort_values('cantidad', ascending=False)
                     .reset_index()
                 )
+                if orden_explicito:
+                    # Orden lógico del proceso (no por cantidad): las combinaciones que no
+                    # están en la lista (ej. un Sub-estado nuevo que aún no se agrega acá)
+                    # quedan al final, ordenadas por cantidad descendente entre ellas.
+                    orden_idx = {etiqueta: i for i, etiqueta in enumerate(orden_explicito)}
+                    df_agrupado['_orden'] = df_agrupado[columna_grupo].map(lambda v: orden_idx.get(v, len(orden_explicito)))
+                    df_agrupado = df_agrupado.sort_values(['_orden', 'cantidad'], ascending=[True, False])
+                else:
+                    df_agrupado = df_agrupado.sort_values('cantidad', ascending=False)
 
                 table_dist = doc.add_table(rows=1, cols=4)
                 table_dist.style = 'Table Grid'
@@ -3107,9 +3115,32 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
         df_vigentes_etapa['_estado_sub'] = df_vigentes_etapa.apply(_etiqueta_estado_sub, axis=1)
 
-        construir_tabla_distribucion('General', df_vigentes_etapa, '_estado_sub', 'Estado / Sub-estado')
-        construir_tabla_distribucion('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'], '_estado_sub', 'Estado / Sub-estado')
-        construir_tabla_distribucion('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'], '_estado_sub', 'Estado / Sub-estado')
+        # Orden lógico del proceso del caso (confirmado con el equipo), no alfabético
+        # ni por cantidad. "En preparación de despacho" se trata como un paso más
+        # dentro de Ajuste, entre "Informe final en preparación" e "Informe Final
+        # Completado", aunque en la Base Maestra sea un Estado aparte.
+        ORDEN_ESTADO_SUB = [
+            'Inspección — Coordinando inspección',
+            'Inspección — Inspector asignado',
+            'Inspección — Inspección completada',
+            'Inspección — Inspección aprobada',
+            'Solicitud de Antecedentes — Solicitando antecedentes',
+            'Solicitud de Antecedentes — Antecedentes solicitados',
+            'Solicitud de Antecedentes — Antecedentes parcialmente recibidos',
+            'Solicitud de Antecedentes — Inspección aprobada',
+            'En ajuste — Análisis',
+            'En ajuste — Ajuste completado',
+            'En ajuste — Rechazo completado',
+            'En ajuste — Informe final en progreso',
+            'En ajuste — Informe final en preparación',
+            'En preparación de despacho — Informe final en preparación',
+            'En ajuste — Informe final completado',
+            'Reabierto por impugnación — Addendum en progreso',
+        ]
+
+        construir_tabla_distribucion('General', df_vigentes_etapa, '_estado_sub', 'Estado / Sub-estado', orden_explicito=ORDEN_ESTADO_SUB)
+        construir_tabla_distribucion('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'], '_estado_sub', 'Estado / Sub-estado', orden_explicito=ORDEN_ESTADO_SUB)
+        construir_tabla_distribucion('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'], '_estado_sub', 'Estado / Sub-estado', orden_explicito=ORDEN_ESTADO_SUB)
 
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
