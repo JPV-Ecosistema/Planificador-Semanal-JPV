@@ -2859,8 +2859,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     from docx import Document
     from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import nsdecls
-    from docx.oxml import parse_xml
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import nsdecls, qn
+    from docx.oxml import parse_xml, OxmlElement
 
     # Carga silenciosa de Base Maestra para rescatar Corredora, Aseguradora, División y Fecha de Creación
     dict_maestro = {}
@@ -3124,7 +3125,69 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
     
                 etiquetas_usadas = set()
-    
+
+                def _set_cell_width(cell, ancho):
+                    cell.width = ancho
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    tcW = tcPr.find(qn('w:tcW'))
+                    if tcW is None:
+                        tcW = OxmlElement('w:tcW')
+                        tcPr.append(tcW)
+                    tcW.set(qn('w:w'), str(int(ancho.twips)))
+                    tcW.set(qn('w:type'), 'dxa')
+
+                def _quitar_bordes(tabla):
+                    tblPr = tabla._tbl.tblPr
+                    bordes = OxmlElement('w:tblBorders')
+                    for lado in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+                        el = OxmlElement(f'w:{lado}')
+                        el.set(qn('w:val'), 'nil')
+                        bordes.append(el)
+                    tblPr.append(bordes)
+
+                def agregar_barra_pct(celda, cantidad, pct, color_hex):
+                    # Barra real (riel gris + relleno de color), no caracteres de texto:
+                    # una tabla anidada de 3 celdas sin bordes dentro de la celda del %.
+                    ancho_track = Cm(2.3)
+                    ancho_label = Cm(1.05)
+                    fraccion = (cantidad / max_cantidad) if max_cantidad > 0 else 0.0
+                    if cantidad > 0:
+                        fraccion = max(fraccion, 0.04)
+                    ancho_relleno = Cm(ancho_track.cm * fraccion)
+                    ancho_resto = Cm(ancho_track.cm - ancho_relleno.cm)
+
+                    tabla_barra = celda.add_table(rows=1, cols=3)
+                    tabla_barra.alignment = WD_TABLE_ALIGNMENT.LEFT
+                    tabla_barra.autofit = False
+                    _quitar_bordes(tabla_barra)
+                    celdas_barra = tabla_barra.rows[0].cells
+
+                    fila_barra = tabla_barra.rows[0]._tr.get_or_add_trPr()
+                    alto_fila = OxmlElement('w:trHeight')
+                    alto_fila.set(qn('w:val'), '140')
+                    alto_fila.set(qn('w:hRule'), 'exact')
+                    fila_barra.append(alto_fila)
+
+                    _set_cell_width(celdas_barra[0], ancho_relleno)
+                    shading_relleno = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_hex))
+                    celdas_barra[0]._tc.get_or_add_tcPr().append(shading_relleno)
+
+                    _set_cell_width(celdas_barra[1], ancho_resto)
+                    shading_track = parse_xml(r'<w:shd {} w:fill="EDF0F3"/>'.format(nsdecls('w')))
+                    celdas_barra[1]._tc.get_or_add_tcPr().append(shading_track)
+
+                    _set_cell_width(celdas_barra[2], ancho_label)
+                    run_lbl = celdas_barra[2].paragraphs[0].add_run(f'  {pct:.1f}%')
+                    run_lbl.font.size = Pt(8)
+                    run_lbl.font.color.rgb = RGBColor(90, 90, 90)
+
+                    # add_table() deja el párrafo vacío original de la celda antes de la
+                    # tabla anidada; se quita para que la barra quede pegada arriba.
+                    for p_vacio in celda.paragraphs:
+                        if not p_vacio.text:
+                            p_vacio._p.getparent().remove(p_vacio._p)
+                            break
+
                 def agregar_grupo_estado(nombre_grupo, color_hex, items):
                     sub_presentes = [(label, texto) for label, texto in items if label in datos_estado]
                     if not sub_presentes:
@@ -3147,24 +3210,17 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         cantidad, hon_uf = datos_estado[label]
                         etiquetas_usadas.add(label)
                         pct = (cantidad / total_casos * 100) if total_casos > 0 else 0.0
-                        n_bloques = max(1, round((cantidad / max_cantidad) * 10)) if max_cantidad > 0 else 0
-    
+
                         rc = table_estado.add_row().cells
                         rc[0].text = texto
                         rc[1].text = str(cantidad)
                         rc[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-                        p_pct = rc[2].paragraphs[0]
-                        run_bar = p_pct.add_run('█' * n_bloques)
-                        run_bar.font.color.rgb = RGBColor.from_string(color_hex)
-                        run_bar.font.size = Pt(8)
-                        run_lbl = p_pct.add_run(f'  {pct:.1f}%')
-                        run_lbl.font.color.rgb = RGBColor(90, 90, 90)
-                        run_lbl.font.size = Pt(8)
-    
+
+                        agregar_barra_pct(rc[2], cantidad, pct, color_hex)
+
                         rc[3].text = f"{hon_uf:,.2f}"
                         rc[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    
+
                         for j in (0, 1, 3):
                             if rc[j].paragraphs[0].runs:
                                 rc[j].paragraphs[0].runs[0].font.size = Pt(8)
