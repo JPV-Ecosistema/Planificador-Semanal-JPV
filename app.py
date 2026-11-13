@@ -2866,12 +2866,14 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     dict_maestro = {}
     dict_dias_asignacion = {}  # numero_caso -> días desde Fecha de asignación (hoy)
     df_bm = pd.DataFrame()
+    fecha_actualizacion_bm = ''
     filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
     if os.path.exists(filepath_bm):
         try:
             with open(filepath_bm, 'r', encoding='utf-8') as f:
                 datos_bm = json.load(f)
                 df_bm = pd.DataFrame(datos_bm['data'])
+                fecha_actualizacion_bm = str(datos_bm.get('fecha', '') or '')
                 for _, row in df_bm.iterrows():
                     num = str(row.get('Número de caso', '')).strip()
                     if num:
@@ -3013,229 +3015,175 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     if (df_informes['_area'] == 'Otras / Sin Clasificar').any():
         construir_tabla_resumen('Resumen Entregables Otras / Sin Clasificar', df_informes[df_informes['_area'] == 'Otras / Sin Clasificar'])
 
-    # --- DISTRIBUCIÓN DE ETAPAS DEL PIPELINE — stock vigente completo, no depende
-    # del período del reporte. "Etapa del Caso" la gestiona JPV Pipeline (hoja
-    # Pipeline_Backup del Google Sheet compartido); acá es sólo lectura. ---
-    doc.add_heading('Distribución de Etapas del Pipeline', level=1)
+    # --- DISTRIBUCIÓN DE ESTADO DEL STOCK — stock vigente completo (no depende del
+    # período del reporte), según el Estado / Sub-estado interno de la Base Maestra. ---
+    doc.add_heading('Distribución de Estado del Stock', level=1)
     if df_bm.empty:
         doc.add_paragraph('No hay Base Maestra cargada para calcular esta sección.')
         doc.add_paragraph('')
     else:
-        col_estado_etapa = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
-        col_div_etapa = 'División' if 'División' in df_bm.columns else (df_bm.columns[3] if len(df_bm.columns) > 3 else None)
-        col_caso_etapa = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+        col_estado_stock = 'Estado' if 'Estado' in df_bm.columns else (df_bm.columns[18] if len(df_bm.columns) > 18 else None)
+        col_div_stock = 'División' if 'División' in df_bm.columns else (df_bm.columns[3] if len(df_bm.columns) > 3 else None)
 
-        if col_estado_etapa is None:
+        if col_estado_stock is None:
             doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
             doc.add_paragraph('')
         else:
-            etapas_pipeline = cargar_etapas_pipeline()
-            df_vigentes_etapa = df_bm[df_bm[col_estado_etapa].astype(str).str.strip().str.lower() != 'cerrado'].copy()
-            df_vigentes_etapa['_hon_uf'] = df_vigentes_etapa.iloc[:, 66].apply(limpiar_monto_mcl) if df_vigentes_etapa.shape[1] > 66 else 0.0
-            df_vigentes_etapa['_area_etapa'] = (
-                df_vigentes_etapa[col_div_etapa].apply(clasificar_area) if col_div_etapa is not None else 'Otras / Sin Clasificar'
+            fecha_fuente_txt = fecha_actualizacion_bm
+            try:
+                fecha_fuente_txt = datetime.strptime(fecha_actualizacion_bm, "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                pass
+            p_fuente = doc.add_paragraph(
+                f"Fuente: Reporte de acciones. Fecha en que se actualizó: {fecha_fuente_txt or 'N/D'}."
             )
-            df_vigentes_etapa['_etapa'] = df_vigentes_etapa[col_caso_etapa].astype(str).str.strip().apply(
-                lambda n: etapas_pipeline.get(n, 'Sin Etapa Registrada') or 'Sin Etapa Registrada'
+            p_fuente.runs[0].font.italic = True
+            p_fuente.runs[0].font.size = Pt(9)
+
+            df_vigentes_estado = df_bm[df_bm[col_estado_stock].astype(str).str.strip().str.lower() != 'cerrado'].copy()
+            df_vigentes_estado['_hon_uf'] = df_vigentes_estado.iloc[:, 66].apply(limpiar_monto_mcl) if df_vigentes_estado.shape[1] > 66 else 0.0
+            df_vigentes_estado['_area_etapa'] = (
+                df_vigentes_estado[col_div_stock].apply(clasificar_area) if col_div_stock is not None else 'Otras / Sin Clasificar'
             )
 
-            def construir_tabla_distribucion(titulo_scope, df_scope, columna_grupo, etiqueta_columna):
-                heading_etapa = doc.add_heading(titulo_scope, level=2)
-                for run in heading_etapa.runs:
+            col_subestado_etapa = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
+
+            def _etiqueta_estado_sub(fila):
+                est = str(fila.get(col_estado_stock, '') or '').strip() or 'Sin Estado'
+                sub = str(fila.get(col_subestado_etapa, '') or '').strip() if col_subestado_etapa else ''
+                return f"{est} — {sub}" if sub else est
+
+            df_vigentes_estado['_estado_sub'] = df_vigentes_estado.apply(_etiqueta_estado_sub, axis=1)
+
+            # Orden y agrupamiento lógico del proceso del caso (confirmado con el equipo),
+            # no alfabético ni por cantidad: cada grupo es un encabezado de color con su
+            # propio total, y debajo sus sub-estados (sin repetir el nombre del Estado en
+            # cada fila). "En preparación de despacho" se trata como un paso más dentro de
+            # Ajuste, entre "Informe final en preparación" e "Informe Final Completado",
+            # aunque en la Base Maestra sea un Estado aparte.
+            GRUPOS_ESTADO = [
+                ('1. Inspección', '5B2C6F', [
+                    ('Inspección — Coordinando inspección', 'Coordinando inspección'),
+                    ('Inspección — Inspector asignado', 'Inspector asignado'),
+                    ('Inspección — Inspección completada', 'Inspección completada'),
+                    ('Inspección — Inspección aprobada', 'Inspección aprobada'),
+                ]),
+                ('2. Solicitud de Antecedentes', '004A99', [
+                    ('Solicitud de Antecedentes — Solicitando antecedentes', 'Solicitando antecedentes'),
+                    ('Solicitud de Antecedentes — Antecedentes solicitados', 'Antecedentes solicitados'),
+                    ('Solicitud de Antecedentes — Antecedentes parcialmente recibidos', 'Antecedentes parcialmente recibidos'),
+                    ('Solicitud de Antecedentes — Inspección aprobada', 'Inspección aprobada'),
+                ]),
+                ('3. Ajuste', 'A04000', [
+                    ('En ajuste — Análisis', 'Análisis'),
+                    ('En ajuste — Ajuste completado', 'Ajuste completado'),
+                    ('En ajuste — Rechazo completado', 'Rechazo completado'),
+                    ('En ajuste — Informe final en progreso', 'Informe final en progreso'),
+                    ('En ajuste — Informe final en preparación', 'Informe final en preparación'),
+                    ('En preparación de despacho — Informe final en preparación', 'En preparación de despacho'),
+                    ('En ajuste — Informe final completado', 'Informe Final Completado'),
+                ]),
+                ('4. Reabierto por Impugnación', 'D9534F', [
+                    ('Reabierto por impugnación — Addendum en progreso', 'Addendum en progreso'),
+                ]),
+            ]
+    
+            def construir_tabla_estado(titulo_scope, df_scope):
+                heading_estado = doc.add_heading(titulo_scope, level=2)
+                for run in heading_estado.runs:
                     run.font.color.rgb = RGBColor(0, 51, 102)
                     run.font.bold = True
-
+    
                 if df_scope.empty:
                     doc.add_paragraph('Sin casos vigentes en este alcance.')
                     doc.add_paragraph('')
                     return
-
+    
                 total_casos = len(df_scope)
-                df_agrupado = (
-                    df_scope.groupby(columna_grupo)
-                    .agg(cantidad=(columna_grupo, 'size'), hon_uf=('_hon_uf', 'sum'))
-                    .sort_values('cantidad', ascending=False)
+                df_agrupado_estado = (
+                    df_scope.groupby('_estado_sub')
+                    .agg(cantidad=('_estado_sub', 'size'), hon_uf=('_hon_uf', 'sum'))
                     .reset_index()
                 )
-
-                table_dist = doc.add_table(rows=1, cols=4)
-                table_dist.style = 'Table Grid'
-                hdr_cells = table_dist.rows[0].cells
-                for i, col_name in enumerate([etiqueta_columna, 'Cantidad', '%', 'Hon (UF)']):
+                datos_estado = {
+                    fila['_estado_sub']: (int(fila['cantidad']), float(fila['hon_uf']))
+                    for _, fila in df_agrupado_estado.iterrows()
+                }
+                max_cantidad = max((c for c, _ in datos_estado.values()), default=0)
+    
+                table_estado = doc.add_table(rows=1, cols=4)
+                table_estado.style = 'Table Grid'
+                hdr_cells = table_estado.rows[0].cells
+                for i, col_name in enumerate(['Sub-estado', 'Cantidad', '%', 'Hon (UF)']):
                     hdr_cells[i].text = col_name
                     run = hdr_cells[i].paragraphs[0].runs[0]
                     run.font.bold = True
                     run.font.color.rgb = RGBColor(255, 255, 255)
                     run.font.size = Pt(8)
-                    shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="1f2d3d"/>'.format(nsdecls('w')))
                     hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
-
-                for _, fila_dist in df_agrupado.iterrows():
-                    row_cells = table_dist.add_row().cells
-                    row_cells[0].text = str(fila_dist[columna_grupo])
-                    row_cells[1].text = str(int(fila_dist['cantidad']))
-                    pct = (fila_dist['cantidad'] / total_casos * 100) if total_casos > 0 else 0.0
-                    row_cells[2].text = f"{pct:.1f}%"
-                    row_cells[3].text = f"{fila_dist['hon_uf']:,.2f}"
-                    for j in range(4):
-                        if row_cells[j].paragraphs[0].runs:
-                            row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
-                        if j > 0:
-                            row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+                etiquetas_usadas = set()
+    
+                def agregar_grupo_estado(nombre_grupo, color_hex, items):
+                    sub_presentes = [(label, texto) for label, texto in items if label in datos_estado]
+                    if not sub_presentes:
+                        return
+                    cant_grupo = sum(datos_estado[label][0] for label, _ in sub_presentes)
+                    uf_grupo = sum(datos_estado[label][1] for label, _ in sub_presentes)
+                    pct_grupo = (cant_grupo / total_casos * 100) if total_casos > 0 else 0.0
+    
+                    fila_grupo = table_estado.add_row().cells
+                    celda_grupo = fila_grupo[0].merge(fila_grupo[3])
+                    celda_grupo.text = f"{nombre_grupo} — {cant_grupo} · {pct_grupo:.1f}% · {uf_grupo:,.2f} UF"
+                    run_grupo = celda_grupo.paragraphs[0].runs[0]
+                    run_grupo.font.bold = True
+                    run_grupo.font.color.rgb = RGBColor(255, 255, 255)
+                    run_grupo.font.size = Pt(9)
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_hex))
+                    celda_grupo._tc.get_or_add_tcPr().append(shading_elm)
+    
+                    for label, texto in sub_presentes:
+                        cantidad, hon_uf = datos_estado[label]
+                        etiquetas_usadas.add(label)
+                        pct = (cantidad / total_casos * 100) if total_casos > 0 else 0.0
+                        n_bloques = max(1, round((cantidad / max_cantidad) * 10)) if max_cantidad > 0 else 0
+    
+                        rc = table_estado.add_row().cells
+                        rc[0].text = texto
+                        rc[1].text = str(cantidad)
+                        rc[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+                        p_pct = rc[2].paragraphs[0]
+                        run_bar = p_pct.add_run('█' * n_bloques)
+                        run_bar.font.color.rgb = RGBColor.from_string(color_hex)
+                        run_bar.font.size = Pt(8)
+                        run_lbl = p_pct.add_run(f'  {pct:.1f}%')
+                        run_lbl.font.color.rgb = RGBColor(90, 90, 90)
+                        run_lbl.font.size = Pt(8)
+    
+                        rc[3].text = f"{hon_uf:,.2f}"
+                        rc[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+                        for j in (0, 1, 3):
+                            if rc[j].paragraphs[0].runs:
+                                rc[j].paragraphs[0].runs[0].font.size = Pt(8)
+    
+                for nombre_grupo, color_hex, items in GRUPOS_ESTADO:
+                    agregar_grupo_estado(nombre_grupo, color_hex, items)
+    
+                # Combinaciones Estado/Sub-estado que todavía no se agregan a GRUPOS_ESTADO
+                # (ej. un sub-estado nuevo): no desaparecen del reporte, se listan al final.
+                restantes = [(label, label) for label in datos_estado if label not in etiquetas_usadas]
+                if restantes:
+                    restantes.sort(key=lambda t: datos_estado[t[0]][0], reverse=True)
+                    agregar_grupo_estado('5. Otros', '6B7280', restantes)
+    
                 doc.add_paragraph('')
-
-            construir_tabla_distribucion('General', df_vigentes_etapa, '_etapa', 'Etapa')
-            construir_tabla_distribucion('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'], '_etapa', 'Etapa')
-            construir_tabla_distribucion('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'], '_etapa', 'Etapa')
-
-    # --- DISTRIBUCIÓN DE ESTADO DEL STOCK — mismo stock vigente, pero según el
-    # Estado / Sub-estado interno de la Base Maestra (no la Etapa de Pipeline). ---
-    doc.add_heading('Distribución de Estado del Stock', level=1)
-    if df_bm.empty:
-        doc.add_paragraph('No hay Base Maestra cargada para calcular esta sección.')
-        doc.add_paragraph('')
-    elif col_estado_etapa is None:
-        doc.add_paragraph('La Base Maestra no tiene columna de Estado.')
-        doc.add_paragraph('')
-    else:
-        col_subestado_etapa = 'Sub estado' if 'Sub estado' in df_bm.columns else (df_bm.columns[19] if len(df_bm.columns) > 19 else None)
-
-        def _etiqueta_estado_sub(fila):
-            est = str(fila.get(col_estado_etapa, '') or '').strip() or 'Sin Estado'
-            sub = str(fila.get(col_subestado_etapa, '') or '').strip() if col_subestado_etapa else ''
-            return f"{est} — {sub}" if sub else est
-
-        df_vigentes_etapa['_estado_sub'] = df_vigentes_etapa.apply(_etiqueta_estado_sub, axis=1)
-
-        # Orden y agrupamiento lógico del proceso del caso (confirmado con el equipo),
-        # no alfabético ni por cantidad: cada grupo es un encabezado de color con su
-        # propio total, y debajo sus sub-estados (sin repetir el nombre del Estado en
-        # cada fila). "En preparación de despacho" se trata como un paso más dentro de
-        # Ajuste, entre "Informe final en preparación" e "Informe Final Completado",
-        # aunque en la Base Maestra sea un Estado aparte.
-        GRUPOS_ESTADO = [
-            ('1. Inspección', '5B2C6F', [
-                ('Inspección — Coordinando inspección', 'Coordinando inspección'),
-                ('Inspección — Inspector asignado', 'Inspector asignado'),
-                ('Inspección — Inspección completada', 'Inspección completada'),
-                ('Inspección — Inspección aprobada', 'Inspección aprobada'),
-            ]),
-            ('2. Solicitud de Antecedentes', '004A99', [
-                ('Solicitud de Antecedentes — Solicitando antecedentes', 'Solicitando antecedentes'),
-                ('Solicitud de Antecedentes — Antecedentes solicitados', 'Antecedentes solicitados'),
-                ('Solicitud de Antecedentes — Antecedentes parcialmente recibidos', 'Antecedentes parcialmente recibidos'),
-                ('Solicitud de Antecedentes — Inspección aprobada', 'Inspección aprobada'),
-            ]),
-            ('3. Ajuste', 'A04000', [
-                ('En ajuste — Análisis', 'Análisis'),
-                ('En ajuste — Ajuste completado', 'Ajuste completado'),
-                ('En ajuste — Rechazo completado', 'Rechazo completado'),
-                ('En ajuste — Informe final en progreso', 'Informe final en progreso'),
-                ('En ajuste — Informe final en preparación', 'Informe final en preparación'),
-                ('En preparación de despacho — Informe final en preparación', 'En preparación de despacho'),
-                ('En ajuste — Informe final completado', 'Informe Final Completado'),
-            ]),
-            ('4. Reabierto por Impugnación', 'D9534F', [
-                ('Reabierto por impugnación — Addendum en progreso', 'Addendum en progreso'),
-            ]),
-        ]
-
-        def construir_tabla_estado(titulo_scope, df_scope):
-            heading_estado = doc.add_heading(titulo_scope, level=2)
-            for run in heading_estado.runs:
-                run.font.color.rgb = RGBColor(0, 51, 102)
-                run.font.bold = True
-
-            if df_scope.empty:
-                doc.add_paragraph('Sin casos vigentes en este alcance.')
-                doc.add_paragraph('')
-                return
-
-            total_casos = len(df_scope)
-            df_agrupado_estado = (
-                df_scope.groupby('_estado_sub')
-                .agg(cantidad=('_estado_sub', 'size'), hon_uf=('_hon_uf', 'sum'))
-                .reset_index()
-            )
-            datos_estado = {
-                fila['_estado_sub']: (int(fila['cantidad']), float(fila['hon_uf']))
-                for _, fila in df_agrupado_estado.iterrows()
-            }
-            max_cantidad = max((c for c, _ in datos_estado.values()), default=0)
-
-            table_estado = doc.add_table(rows=1, cols=4)
-            table_estado.style = 'Table Grid'
-            hdr_cells = table_estado.rows[0].cells
-            for i, col_name in enumerate(['Sub-estado', 'Cantidad', '%', 'Hon (UF)']):
-                hdr_cells[i].text = col_name
-                run = hdr_cells[i].paragraphs[0].runs[0]
-                run.font.bold = True
-                run.font.color.rgb = RGBColor(255, 255, 255)
-                run.font.size = Pt(8)
-                shading_elm = parse_xml(r'<w:shd {} w:fill="1f2d3d"/>'.format(nsdecls('w')))
-                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
-
-            etiquetas_usadas = set()
-
-            def agregar_grupo_estado(nombre_grupo, color_hex, items):
-                sub_presentes = [(label, texto) for label, texto in items if label in datos_estado]
-                if not sub_presentes:
-                    return
-                cant_grupo = sum(datos_estado[label][0] for label, _ in sub_presentes)
-                uf_grupo = sum(datos_estado[label][1] for label, _ in sub_presentes)
-                pct_grupo = (cant_grupo / total_casos * 100) if total_casos > 0 else 0.0
-
-                fila_grupo = table_estado.add_row().cells
-                celda_grupo = fila_grupo[0].merge(fila_grupo[3])
-                celda_grupo.text = f"{nombre_grupo} — {cant_grupo} · {pct_grupo:.1f}% · {uf_grupo:,.2f} UF"
-                run_grupo = celda_grupo.paragraphs[0].runs[0]
-                run_grupo.font.bold = True
-                run_grupo.font.color.rgb = RGBColor(255, 255, 255)
-                run_grupo.font.size = Pt(9)
-                shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_hex))
-                celda_grupo._tc.get_or_add_tcPr().append(shading_elm)
-
-                for label, texto in sub_presentes:
-                    cantidad, hon_uf = datos_estado[label]
-                    etiquetas_usadas.add(label)
-                    pct = (cantidad / total_casos * 100) if total_casos > 0 else 0.0
-                    n_bloques = max(1, round((cantidad / max_cantidad) * 10)) if max_cantidad > 0 else 0
-
-                    rc = table_estado.add_row().cells
-                    rc[0].text = texto
-                    rc[1].text = str(cantidad)
-                    rc[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-                    p_pct = rc[2].paragraphs[0]
-                    run_bar = p_pct.add_run('█' * n_bloques)
-                    run_bar.font.color.rgb = RGBColor.from_string(color_hex)
-                    run_bar.font.size = Pt(8)
-                    run_lbl = p_pct.add_run(f'  {pct:.1f}%')
-                    run_lbl.font.color.rgb = RGBColor(90, 90, 90)
-                    run_lbl.font.size = Pt(8)
-
-                    rc[3].text = f"{hon_uf:,.2f}"
-                    rc[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-
-                    for j in (0, 1, 3):
-                        if rc[j].paragraphs[0].runs:
-                            rc[j].paragraphs[0].runs[0].font.size = Pt(8)
-
-            for nombre_grupo, color_hex, items in GRUPOS_ESTADO:
-                agregar_grupo_estado(nombre_grupo, color_hex, items)
-
-            # Combinaciones Estado/Sub-estado que todavía no se agregan a GRUPOS_ESTADO
-            # (ej. un sub-estado nuevo): no desaparecen del reporte, se listan al final.
-            restantes = [(label, label) for label in datos_estado if label not in etiquetas_usadas]
-            if restantes:
-                restantes.sort(key=lambda t: datos_estado[t[0]][0], reverse=True)
-                agregar_grupo_estado('5. Otros', '6B7280', restantes)
-
-            doc.add_paragraph('')
-
-        construir_tabla_estado('General', df_vigentes_etapa)
-        construir_tabla_estado('Ingeniería', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Ingeniería'])
-        construir_tabla_estado('Equipo Móvil', df_vigentes_etapa[df_vigentes_etapa['_area_etapa'] == 'Equipo Móvil'])
+    
+            construir_tabla_estado('General', df_vigentes_estado)
+            construir_tabla_estado('Ingeniería', df_vigentes_estado[df_vigentes_estado['_area_etapa'] == 'Ingeniería'])
+            construir_tabla_estado('Equipo Móvil', df_vigentes_estado[df_vigentes_estado['_area_etapa'] == 'Equipo Móvil'])
 
     # --- COBERTURA DE PLANIFICACIÓN vs. STOCK TOTAL — primera hoja del reporte ---
     # Cuánto del stock total de casos vigentes (toda la gerencia) se está planificando
