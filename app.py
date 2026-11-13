@@ -3059,33 +3059,40 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             # Orden y agrupamiento lógico del proceso del caso (confirmado con el equipo),
             # no alfabético ni por cantidad: cada grupo es un encabezado de color con su
             # propio total, y debajo sus sub-estados (sin repetir el nombre del Estado en
-            # cada fila). "En preparación de despacho" se trata como un paso más dentro de
-            # Ajuste, entre "Informe final en preparación" e "Informe Final Completado",
-            # aunque en la Base Maestra sea un Estado aparte.
+            # cada fila). Cada ítem es (texto a mostrar, [combinaciones Estado—Sub-estado
+            # que se suman en esa fila]) — una lista de más de una combinación fusiona
+            # casos mal etiquetados en el origen bajo una sola fila. "En preparación de
+            # despacho" se trata como un paso más dentro de Ajuste, entre "Informe final
+            # en preparación" e "Informe Final Completado", aunque en la Base Maestra sea
+            # un Estado aparte. "Inspección aprobada" bajo "Solicitud de Antecedentes" es
+            # un caso mal etiquetado en el origen (debería estar en Inspección): se funde
+            # con la fila "Inspección aprobada" de ese grupo en vez de mostrarse aparte.
             GRUPOS_ESTADO = [
                 ('1. Inspección', '5B2C6F', [
-                    ('Inspección — Coordinando inspección', 'Coordinando inspección'),
-                    ('Inspección — Inspector asignado', 'Inspector asignado'),
-                    ('Inspección — Inspección completada', 'Inspección completada'),
-                    ('Inspección — Inspección aprobada', 'Inspección aprobada'),
+                    ('Coordinando inspección', ['Inspección — Coordinando inspección']),
+                    ('Inspector asignado', ['Inspección — Inspector asignado']),
+                    ('Inspección completada', ['Inspección — Inspección completada']),
+                    ('Inspección aprobada', [
+                        'Inspección — Inspección aprobada',
+                        'Solicitud de Antecedentes — Inspección aprobada',
+                    ]),
                 ]),
                 ('2. Solicitud de Antecedentes', '004A99', [
-                    ('Solicitud de Antecedentes — Solicitando antecedentes', 'Solicitando antecedentes'),
-                    ('Solicitud de Antecedentes — Antecedentes solicitados', 'Antecedentes solicitados'),
-                    ('Solicitud de Antecedentes — Antecedentes parcialmente recibidos', 'Antecedentes parcialmente recibidos'),
-                    ('Solicitud de Antecedentes — Inspección aprobada', 'Inspección aprobada'),
+                    ('Solicitando antecedentes', ['Solicitud de Antecedentes — Solicitando antecedentes']),
+                    ('Antecedentes solicitados', ['Solicitud de Antecedentes — Antecedentes solicitados']),
+                    ('Antecedentes parcialmente recibidos', ['Solicitud de Antecedentes — Antecedentes parcialmente recibidos']),
                 ]),
                 ('3. Ajuste', 'A04000', [
-                    ('En ajuste — Análisis', 'Análisis'),
-                    ('En ajuste — Ajuste completado', 'Ajuste completado'),
-                    ('En ajuste — Rechazo completado', 'Rechazo completado'),
-                    ('En ajuste — Informe final en progreso', 'Informe final en progreso'),
-                    ('En ajuste — Informe final en preparación', 'Informe final en preparación'),
-                    ('En preparación de despacho — Informe final en preparación', 'En preparación de despacho'),
-                    ('En ajuste — Informe final completado', 'Informe Final Completado'),
+                    ('Análisis', ['En ajuste — Análisis']),
+                    ('Ajuste completado', ['En ajuste — Ajuste completado']),
+                    ('Rechazo completado', ['En ajuste — Rechazo completado']),
+                    ('Informe final en progreso', ['En ajuste — Informe final en progreso']),
+                    ('Informe final en preparación', ['En ajuste — Informe final en preparación']),
+                    ('En preparación de despacho', ['En preparación de despacho — Informe final en preparación']),
+                    ('Informe Final Completado', ['En ajuste — Informe final completado']),
                 ]),
                 ('4. Reabierto por Impugnación', 'D9534F', [
-                    ('Reabierto por impugnación — Addendum en progreso', 'Addendum en progreso'),
+                    ('Addendum en progreso', ['Reabierto por impugnación — Addendum en progreso']),
                 ]),
             ]
     
@@ -3235,11 +3242,22 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                             break
 
                 def agregar_grupo_estado(nombre_grupo, color_hex, items):
-                    sub_presentes = [(label, texto) for label, texto in items if label in datos_estado]
+                    # Cada item es (texto a mostrar, [combinaciones que se suman en esa
+                    # fila]) — permite fundir en una sola fila más de una combinación
+                    # Estado—Sub-estado (ej. un caso mal etiquetado en el origen).
+                    sub_presentes = []
+                    for texto, labels in items:
+                        labels_presentes = [l for l in labels if l in datos_estado]
+                        if not labels_presentes:
+                            continue
+                        cantidad = sum(datos_estado[l][0] for l in labels_presentes)
+                        hon_uf = sum(datos_estado[l][1] for l in labels_presentes)
+                        etiquetas_usadas.update(labels_presentes)
+                        sub_presentes.append((texto, cantidad, hon_uf))
                     if not sub_presentes:
                         return
-                    cant_grupo = sum(datos_estado[label][0] for label, _ in sub_presentes)
-                    uf_grupo = sum(datos_estado[label][1] for label, _ in sub_presentes)
+                    cant_grupo = sum(cantidad for _, cantidad, _ in sub_presentes)
+                    uf_grupo = sum(hon_uf for _, _, hon_uf in sub_presentes)
                     pct_grupo = (cant_grupo / total_casos * 100) if total_casos > 0 else 0.0
     
                     fila_grupo = table_estado.add_row().cells
@@ -3255,9 +3273,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     celda_grupo._tc.get_or_add_tcPr().append(shading_elm)
                     _set_cell_margins(celda_grupo, top=100, bottom=100)
 
-                    for label, texto in sub_presentes:
-                        cantidad, hon_uf = datos_estado[label]
-                        etiquetas_usadas.add(label)
+                    for texto, cantidad, hon_uf in sub_presentes:
                         pct = (cantidad / total_casos * 100) if total_casos > 0 else 0.0
 
                         rc = table_estado.add_row().cells
@@ -3282,7 +3298,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     
                 # Combinaciones Estado/Sub-estado que todavía no se agregan a GRUPOS_ESTADO
                 # (ej. un sub-estado nuevo): no desaparecen del reporte, se listan al final.
-                restantes = [(label, label) for label in datos_estado if label not in etiquetas_usadas]
+                restantes = [(label, [label]) for label in datos_estado if label not in etiquetas_usadas]
                 if restantes:
                     restantes.sort(key=lambda t: datos_estado[t[0]][0], reverse=True)
                     agregar_grupo_estado('5. Otros', '6B7280', restantes)
