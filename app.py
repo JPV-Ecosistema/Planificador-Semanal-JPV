@@ -2859,7 +2859,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     from docx import Document
     from docx.shared import Pt, Cm, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
     from docx.oxml.ns import nsdecls, qn
     from docx.oxml import parse_xml, OxmlElement
 
@@ -3112,19 +3112,19 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 }
                 max_cantidad = max((c for c, _ in datos_estado.values()), default=0)
     
-                table_estado = doc.add_table(rows=1, cols=4)
-                table_estado.style = 'Table Grid'
-                hdr_cells = table_estado.rows[0].cells
-                for i, col_name in enumerate(['Sub-estado', 'Cantidad', '%', 'Hon (UF)']):
-                    hdr_cells[i].text = col_name
-                    run = hdr_cells[i].paragraphs[0].runs[0]
-                    run.font.bold = True
-                    run.font.color.rgb = RGBColor(255, 255, 255)
-                    run.font.size = Pt(8)
-                    shading_elm = parse_xml(r'<w:shd {} w:fill="1f2d3d"/>'.format(nsdecls('w')))
-                    hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
-    
-                etiquetas_usadas = set()
+                def _set_cell_margins(cell, top=90, bottom=90, left=100, right=100):
+                    # Márgenes generosos (en twips) para que las filas respiren — por
+                    # defecto Word deja muy poco aire arriba/abajo del texto, lo que da
+                    # la sensación de tabla apiñada.
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    tcMar = OxmlElement('w:tcMar')
+                    for lado, valor in (('top', top), ('bottom', bottom), ('left', left), ('right', right)):
+                        el = OxmlElement(f'w:{lado}')
+                        el.set(qn('w:w'), str(valor))
+                        el.set(qn('w:type'), 'dxa')
+                        tcMar.append(el)
+                    tcPr.append(tcMar)
+                    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
                 def _set_cell_width(cell, ancho):
                     cell.width = ancho
@@ -3135,6 +3135,43 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         tcPr.append(tcW)
                     tcW.set(qn('w:w'), str(int(ancho.twips)))
                     tcW.set(qn('w:type'), 'dxa')
+
+                # Anchos fijos de las 4 columnas: dejar que Word las auto-ajuste según
+                # contenido hacía que el ancho de la columna "%" variara de una fila a
+                # otra (según cuánto texto tuviera "Hon (UF)" en esa fila), lo que podía
+                # recortar la barra o su etiqueta en algunas filas.
+                # El área útil de página con los márgenes por defecto es ~15.24 cm
+                # (Carta, márgenes de 3.175 cm); estos anchos suman 14.6 cm para dejar
+                # margen y que Word/LibreOffice no tengan que comprimir la tabla (eso
+                # fue lo que recortaba la barra y su etiqueta de %).
+                ANCHO_COL_SUBESTADO = Cm(6.4)
+                ANCHO_COL_CANTIDAD = Cm(1.5)
+                ANCHO_COL_PCT = Cm(4.5)
+                ANCHO_COL_UF = Cm(2.2)
+                ANCHOS_COLUMNAS = [ANCHO_COL_SUBESTADO, ANCHO_COL_CANTIDAD, ANCHO_COL_PCT, ANCHO_COL_UF]
+
+                table_estado = doc.add_table(rows=1, cols=4)
+                table_estado.style = 'Table Grid'
+                table_estado.autofit = False
+                # Fijar el ancho por table.columns (no por celda) es lo que realmente
+                # actualiza la grilla de la tabla (tblGrid); fijarlo solo en cada celda
+                # dejaba la grilla original y producía anchos inconsistentes entre filas
+                # que recortaban la barra y su etiqueta de %.
+                for i, ancho in enumerate(ANCHOS_COLUMNAS):
+                    table_estado.columns[i].width = ancho
+                hdr_cells = table_estado.rows[0].cells
+                for i, col_name in enumerate(['Sub-estado', 'Cant.', '%', 'Hon (UF)']):
+                    hdr_cells[i].text = col_name
+                    run = hdr_cells[i].paragraphs[0].runs[0]
+                    run.font.bold = True
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+                    run.font.size = Pt(9)
+                    shading_elm = parse_xml(r'<w:shd {} w:fill="1f2d3d"/>'.format(nsdecls('w')))
+                    hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                    _set_cell_margins(hdr_cells[i])
+                    _set_cell_width(hdr_cells[i], ANCHOS_COLUMNAS[i])
+
+                etiquetas_usadas = set()
 
                 def _quitar_bordes(tabla):
                     tblPr = tabla._tbl.tblPr
@@ -3148,13 +3185,20 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                 def agregar_barra_pct(celda, cantidad, pct, color_hex):
                     # Barra real (riel gris + relleno de color), no caracteres de texto:
                     # una tabla anidada de 3 celdas sin bordes dentro de la celda del %.
-                    ancho_track = Cm(2.3)
-                    ancho_label = Cm(1.05)
+                    _set_cell_margins(celda, left=100, right=60)
+                    ancho_track = Cm(2.6)
+                    ancho_label = Cm(1.4)
+                    # Mínimo absoluto (no solo un % de la barra) para el relleno y para
+                    # el riel: una celda anidada demasiado angosta (ej. < ~0.15cm) hace
+                    # que algunos renderizadores (confirmado con LibreOffice) colapsen
+                    # el layout de la fila y se pierda la etiqueta del %.
+                    minimo_segmento = 0.35
                     fraccion = (cantidad / max_cantidad) if max_cantidad > 0 else 0.0
-                    if cantidad > 0:
-                        fraccion = max(fraccion, 0.04)
-                    ancho_relleno = Cm(ancho_track.cm * fraccion)
-                    ancho_resto = Cm(ancho_track.cm - ancho_relleno.cm)
+                    ancho_relleno_cm = ancho_track.cm * fraccion
+                    ancho_relleno_cm = max(ancho_relleno_cm, minimo_segmento)
+                    ancho_relleno_cm = min(ancho_relleno_cm, ancho_track.cm - minimo_segmento)
+                    ancho_relleno = Cm(ancho_relleno_cm)
+                    ancho_resto = Cm(ancho_track.cm - ancho_relleno_cm)
 
                     tabla_barra = celda.add_table(rows=1, cols=3)
                     tabla_barra.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -3164,7 +3208,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
                     fila_barra = tabla_barra.rows[0]._tr.get_or_add_trPr()
                     alto_fila = OxmlElement('w:trHeight')
-                    alto_fila.set(qn('w:val'), '140')
+                    alto_fila.set(qn('w:val'), '220')
                     alto_fila.set(qn('w:hRule'), 'exact')
                     fila_barra.append(alto_fila)
 
@@ -3173,16 +3217,18 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     celdas_barra[0]._tc.get_or_add_tcPr().append(shading_relleno)
 
                     _set_cell_width(celdas_barra[1], ancho_resto)
-                    shading_track = parse_xml(r'<w:shd {} w:fill="EDF0F3"/>'.format(nsdecls('w')))
+                    shading_track = parse_xml(r'<w:shd {} w:fill="E9ECF1"/>'.format(nsdecls('w')))
                     celdas_barra[1]._tc.get_or_add_tcPr().append(shading_track)
 
                     _set_cell_width(celdas_barra[2], ancho_label)
+                    celdas_barra[2].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                     run_lbl = celdas_barra[2].paragraphs[0].add_run(f'  {pct:.1f}%')
-                    run_lbl.font.size = Pt(8)
+                    run_lbl.font.size = Pt(9)
                     run_lbl.font.color.rgb = RGBColor(90, 90, 90)
 
                     # add_table() deja el párrafo vacío original de la celda antes de la
-                    # tabla anidada; se quita para que la barra quede pegada arriba.
+                    # tabla anidada; se quita para que la barra quede centrada (el margen
+                    # generoso de la celda contenedora es lo que da el aire alrededor).
                     for p_vacio in celda.paragraphs:
                         if not p_vacio.text:
                             p_vacio._p.getparent().remove(p_vacio._p)
@@ -3197,21 +3243,26 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                     pct_grupo = (cant_grupo / total_casos * 100) if total_casos > 0 else 0.0
     
                     fila_grupo = table_estado.add_row().cells
+                    for i in range(4):
+                        _set_cell_width(fila_grupo[i], ANCHOS_COLUMNAS[i])
                     celda_grupo = fila_grupo[0].merge(fila_grupo[3])
                     celda_grupo.text = f"{nombre_grupo} — {cant_grupo} · {pct_grupo:.1f}% · {uf_grupo:,.2f} UF"
                     run_grupo = celda_grupo.paragraphs[0].runs[0]
                     run_grupo.font.bold = True
                     run_grupo.font.color.rgb = RGBColor(255, 255, 255)
-                    run_grupo.font.size = Pt(9)
+                    run_grupo.font.size = Pt(10)
                     shading_elm = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), color_hex))
                     celda_grupo._tc.get_or_add_tcPr().append(shading_elm)
-    
+                    _set_cell_margins(celda_grupo, top=100, bottom=100)
+
                     for label, texto in sub_presentes:
                         cantidad, hon_uf = datos_estado[label]
                         etiquetas_usadas.add(label)
                         pct = (cantidad / total_casos * 100) if total_casos > 0 else 0.0
 
                         rc = table_estado.add_row().cells
+                        for i in range(4):
+                            _set_cell_width(rc[i], ANCHOS_COLUMNAS[i])
                         rc[0].text = texto
                         rc[1].text = str(cantidad)
                         rc[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -3222,8 +3273,9 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         rc[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
                         for j in (0, 1, 3):
+                            _set_cell_margins(rc[j])
                             if rc[j].paragraphs[0].runs:
-                                rc[j].paragraphs[0].runs[0].font.size = Pt(8)
+                                rc[j].paragraphs[0].runs[0].font.size = Pt(9)
     
                 for nombre_grupo, color_hex, items in GRUPOS_ESTADO:
                     agregar_grupo_estado(nombre_grupo, color_hex, items)
