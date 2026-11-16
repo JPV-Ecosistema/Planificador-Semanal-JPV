@@ -655,11 +655,19 @@ def vista_planificador(modo="Semanal"):
             
             # --- HERENCIA MCL ---
             if modo == "Semanal":
-                target_date = ahora_chile + timedelta(weeks=offset_weeks)
-                target_month_id = target_date.strftime("%Y_%m")
-                mcl_data, mcl_path = load_plan_mensual(ajustador_seleccionado, explicit_month_id=target_month_id)
                 target_week_id = get_week_identifier(offset_weeks)
-                
+
+                # La semana objetivo puede caer en el límite entre dos meses calendario
+                # (ej. Lunes 30/Nov - Viernes 04/Dic). El hito del Plan Mensual pudo haberse
+                # guardado bajo cualquiera de los dos meses, según cuál mes estaba viendo el
+                # ajustador al crearlo, así que se revisan los archivos de ambos meses.
+                meses_target_semana = sorted({lunes_target.strftime("%Y_%m"), viernes_target.strftime("%Y_%m")})
+                mcl_fuentes = {}
+                for _mid in meses_target_semana:
+                    _data_mes, _path_mes = load_plan_mensual(ajustador_seleccionado, explicit_month_id=_mid)
+                    mcl_fuentes[_mid] = [_data_mes, _path_mes]
+                mcl_data = [t for _data_mes, _ in mcl_fuentes.values() for t in _data_mes]
+
                 mcl_pendientes = []
                 for t in mcl_data:
                     try:
@@ -957,15 +965,16 @@ def vista_planificador(modo="Semanal"):
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
 
-                            if 'mcl_data' in locals() and mcl_data:
+                            if 'mcl_fuentes' in locals() and mcl_fuentes:
                                 ids_a_marcar = st.session_state.get('mcl_ids_seleccionados', set())
-                                mcl_modificado = False
-                                for t in mcl_data:
-                                    if t.get('id_transaccion') in ids_a_marcar and not t.get('agendado_semana'):
-                                        t['agendado_semana'] = target_week_id
-                                        mcl_modificado = True
-                                if mcl_modificado:
-                                    save_plan_actualizado(mcl_path, mcl_data)
+                                for _mid, (_data_mes, _path_mes) in mcl_fuentes.items():
+                                    mcl_modificado = False
+                                    for t in _data_mes:
+                                        if t.get('id_transaccion') in ids_a_marcar and not t.get('agendado_semana'):
+                                            t['agendado_semana'] = target_week_id
+                                            mcl_modificado = True
+                                    if mcl_modificado:
+                                        save_plan_actualizado(_path_mes, _data_mes)
 
                             save_plan_actualizado(filepath, plan_existente + plan_transaccional)
                             st.session_state['_plan_ok_Semanal'] = f"✅ Plan Semanal ({semana_opcion}): {n} registro(s) guardados correctamente."
