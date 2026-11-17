@@ -374,6 +374,51 @@ def save_plan_actualizado(filepath, data):
         except Exception as e:
             st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
 
+def propagar_estado_a_hito_mensual(ajustador, id_mcl_origen, mes_hint, nuevo_estado_cumplimiento, nueva_fecha_ejecucion):
+    """Si una tarea del Plan Semanal proviene de un hito del Plan Mensual (id_mcl_origen),
+    refleja su estado de cumplimiento (y fecha real de ejecución) en el hito de origen,
+    para que completar la tarea semanal también complete el hito mensual automáticamente.
+    Solo busca en archivos locales ya sincronizados (no dispara llamadas a Google Sheets
+    para archivos inexistentes)."""
+    if not id_mcl_origen:
+        return
+    ajustador_normalizado = " ".join(str(ajustador).split())
+    candidatos = []
+    if mes_hint:
+        candidatos.append(mes_hint)
+    for _off in (0, -1, -2, 1):
+        _mid = get_month_identifier(_off)
+        if _mid not in candidatos:
+            candidatos.append(_mid)
+
+    for mid in candidatos:
+        filename = f"plan_mensual_mcl_{ajustador_normalizado.replace(' ', '_')}_{mid}.json"
+        filepath = os.path.join(PERSISTENCE_DIR, filename)
+        if not os.path.exists(filepath):
+            continue
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                datos_mes = json.load(f)
+        except Exception:
+            continue
+
+        encontrado = False
+        modificado = False
+        for t in datos_mes:
+            if t.get('id_transaccion') == id_mcl_origen:
+                encontrado = True
+                if t.get('estado_cumplimiento') != nuevo_estado_cumplimiento:
+                    t['estado_cumplimiento'] = nuevo_estado_cumplimiento
+                    modificado = True
+                if nueva_fecha_ejecucion and t.get('fecha_ejecucion') != nueva_fecha_ejecucion:
+                    t['fecha_ejecucion'] = nueva_fecha_ejecucion
+                    modificado = True
+                break
+        if encontrado:
+            if modificado:
+                save_plan_actualizado(filepath, datos_mes)
+            return
+
 def load_observaciones_sin_preliminar():
     """Carga las Observaciones (razón de no envío del Preliminar) guardadas por caso.
 
@@ -609,6 +654,18 @@ def vista_planificador(modo="Semanal"):
                                                     task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
                                                 plan_modificado.append(task)
                                         save_plan_actualizado(path_boveda, plan_modificado)
+                                        if modo == "Semanal":
+                                            # Si alguna de estas tareas proviene de un hito del Plan Mensual,
+                                            # refleja aquí su cumplimiento también en el hito de origen.
+                                            for _t in plan_modificado:
+                                                if _t.get('id_mcl_origen'):
+                                                    propagar_estado_a_hito_mensual(
+                                                        ajustador_seleccionado,
+                                                        _t.get('id_mcl_origen'),
+                                                        _t.get('id_mcl_origen_mes', ''),
+                                                        _t.get('estado_cumplimiento', 'Pendiente'),
+                                                        _t.get('fecha_ejecucion', ''),
+                                                    )
                                         st.session_state[f"_plan_ok_{modo}"] = f"✅ Plan actualizado: {len(plan_modificado)} acción(es) guardadas."
                                         _form_prefixes = (
                                             'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
@@ -667,6 +724,7 @@ def vista_planificador(modo="Semanal"):
                     _data_mes, _path_mes = load_plan_mensual(ajustador_seleccionado, explicit_month_id=_mid)
                     mcl_fuentes[_mid] = [_data_mes, _path_mes]
                 mcl_data = [t for _data_mes, _ in mcl_fuentes.values() for t in _data_mes]
+                mcl_origen_mes_por_id = {t.get('id_transaccion'): _mid for _mid, (_data_mes, _) in mcl_fuentes.items() for t in _data_mes}
 
                 mcl_pendientes = []
                 for t in mcl_data:
@@ -705,6 +763,7 @@ def vista_planificador(modo="Semanal"):
                         task_to_add = mcl_task.copy()
                         task_to_add['fecha_compromiso'] = dt.strftime("%Y-%m-%d")
                         task_to_add['id_mcl_origen'] = mcl_task.get('id_transaccion', '')
+                        task_to_add['id_mcl_origen_mes'] = mcl_origen_mes_por_id.get(mcl_task.get('id_transaccion', ''), '')
                         task_to_add['tipo_actividad'] = tipo_actividad_actual
                         plan_transaccional.append(task_to_add)
 
@@ -1289,6 +1348,17 @@ def vista_diario():
                 if cambios_realizados:
                     try:
                         save_plan_actualizado(filepath, plan_data)
+                        # Si alguna tarea proviene de un hito del Plan Mensual, refleja aquí
+                        # su cumplimiento también en el hito de origen.
+                        for _t in plan_data:
+                            if _t.get('id_mcl_origen'):
+                                propagar_estado_a_hito_mensual(
+                                    ajustador_input,
+                                    _t.get('id_mcl_origen'),
+                                    _t.get('id_mcl_origen_mes', ''),
+                                    _t.get('estado_cumplimiento', 'Pendiente'),
+                                    _t.get('fecha_ejecucion', ''),
+                                )
                         n_real = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
                         n_tot  = len(plan_data)
                         st.session_state['_diario_ok'] = f"✅ Cumplimiento actualizado: {n_real} de {n_tot} tarea(s) marcadas como realizadas."
