@@ -410,8 +410,12 @@ def propagar_estado_a_hito_mensual(ajustador, id_mcl_origen, mes_hint, nuevo_est
                 if t.get('estado_cumplimiento') != nuevo_estado_cumplimiento:
                     t['estado_cumplimiento'] = nuevo_estado_cumplimiento
                     modificado = True
-                if nueva_fecha_ejecucion and t.get('fecha_ejecucion') != nueva_fecha_ejecucion:
-                    t['fecha_ejecucion'] = nueva_fecha_ejecucion
+                # Si se desmarca (vuelve a Pendiente), la fecha de ejecución también se
+                # limpia: un hito Pendiente no debería conservar una fecha real de cuando
+                # estuvo marcado Realizado.
+                fecha_deseada = nueva_fecha_ejecucion if nuevo_estado_cumplimiento == 'Realizado' else ''
+                if t.get('fecha_ejecucion', '') != fecha_deseada:
+                    t['fecha_ejecucion'] = fecha_deseada
                     modificado = True
                 break
         if encontrado:
