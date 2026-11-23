@@ -4848,9 +4848,6 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
     import pytz
 
     word_bytes = generar_reporte_entregables_word(df_mes, mes_opcion, dias_mes_target, tipo_periodo="Mensual")
@@ -4920,7 +4917,7 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
 
     def tabla_resumen_entregables(h2):
         b = bloque(h2=h2)
-        if b is None:
+        if b is None or b['table'] is None:
             return []
         filas = b['table']['rows']
         return filas[1:] if filas and filas[0][0] == 'Clasificación' else filas
@@ -4930,16 +4927,21 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         return (sum(num(f[1]) for f in filas), sum(num(f[2]) for f in filas),
                 sum(num(f[3]) for f in filas), sum(num(f[4]) for f in filas))
 
-    def grupos_distribucion(h2):
+    def grupos_con_subestados(h2):
         b = bloque(h1='Distribución de Estado del Stock', h2=h2)
-        if b is None:
+        if b is None or b['table'] is None:
             return []
         grupos = []
+        grupo_actual = None
         for fila in b['table']['rows']:
             if fila[0] != '' and len(set(fila)) == 1:
                 parsed = parse_grupo_header(fila[0])
                 if parsed:
-                    grupos.append(parsed)
+                    nombre, cant, pct, uf = parsed
+                    grupo_actual = {'nombre': nombre, 'cantidad': cant, 'pct': pct, 'uf': uf, 'subestados': []}
+                    grupos.append(grupo_actual)
+            elif grupo_actual is not None:
+                grupo_actual['subestados'].append((fila[0], num(fila[1]), num(fila[3])))
         return grupos
 
     def cobertura(h1, h2):
@@ -4974,7 +4976,8 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     C_LTGREEN = RGBColor(227, 245, 233)
     C_GOLD    = RGBColor(184, 148, 60)
     C_CORAL   = RGBColor(201, 64, 64)
-    COLORES_GRUPOS_MPL = ['#5B2C6F', '#004A99', '#A04000', '#D9534F', '#6B7280']
+    COLORES_GRUPOS_RGB = [RGBColor(0x5B, 0x2C, 0x6F), RGBColor(0x00, 0x4A, 0x99), RGBColor(0xA0, 0x40, 0x00),
+                          RGBColor(0xD9, 0x53, 0x4F), RGBColor(0x6B, 0x72, 0x80)]
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     LOGO_PLANTILLA_PATH = os.path.join(BASE_DIR, 'Logo JPV Plantilla.png')
@@ -5086,6 +5089,35 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         txt(sl, '✅', 6.2, 2.6, 1.0, 0.7, size=30, align=PP_ALIGN.CENTER)
         txt(sl, mensaje, 3.9, 3.35, 5.5, 0.55, size=13, bold=True, color=C_GREEN, align=PP_ALIGN.CENTER)
 
+    def tarjeta_estado(sl, x, y, w, h, grupo, color):
+        """Tarjeta de un grupo de Estado: encabezado con el número grande del grupo
+        (cantidad · % del stock), y debajo su distribución por sub-estado (mini-barras
+        relativas al sub-estado más grande de la propia tarjeta)."""
+        header_h = 0.66
+        rect(sl, x, y, w, header_h, fill=color)
+        txt(sl, grupo['nombre'], x + 0.15, y + 0.06, w - 0.3, 0.3, size=12.5, bold=True, color=C_WHITE)
+        etiqueta_casos = '1 caso' if grupo['cantidad'] == 1 else f"{grupo['cantidad']:.0f} casos"
+        txt(sl, f"{etiqueta_casos}  ·  {grupo['pct']:.1f}% del stock  ·  {grupo['uf']:,.2f} UF",
+            x + 0.15, y + 0.36, w - 0.3, 0.26, size=9.5, color=C_WHITE)
+
+        subs = sorted(grupo['subestados'], key=lambda s: -s[1])
+        if not subs:
+            return
+        max_sub = max(s[1] for s in subs) or 1
+        cuerpo_h = h - header_h - 0.1
+        fila_h = min(0.32, cuerpo_h / len(subs))
+        label_w = w * 0.46
+        barra_w = w * 0.30
+        yy = y + header_h + 0.06
+        for texto, cant_s, uf_s in subs:
+            txt(sl, texto, x + 0.12, yy, label_w, fila_h, size=7.8, color=C_TEXT)
+            frac = cant_s / max_sub
+            rect(sl, x + 0.12 + label_w, yy + fila_h * 0.3, barra_w, fila_h * 0.4, fill=C_STEEL)
+            rect(sl, x + 0.12 + label_w, yy + fila_h * 0.3, max(barra_w * frac, 0.04), fila_h * 0.4, fill=color)
+            txt(sl, f"{cant_s:.0f}", x + 0.12 + label_w + barra_w + 0.08, yy, w - (0.12 + label_w + barra_w + 0.08) - 0.1, fila_h,
+                size=7.8, bold=True, color=C_TEXT)
+            yy += fila_h
+
     slides_info = []
 
     # ── Slide: Portada ──
@@ -5123,6 +5155,42 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         tabla(sl, ['Categoría', 'Plan. Cant.', 'Real. Cant.', '% Cumpl.'], rows_t, 0.4, 2.35, 12.5, 4.3,
               hdr_color=C_NAVY, col_widths=[6.5, 2.0, 2.0, 2.0], fuente=11)
 
+    # ── Slide: Resultado Financiero del Mes (Ingresos IFL vs WIP) ──
+    sl = blank()
+    header(sl, 'Resultado Financiero del Mes', subtitulo=mes_nombre)
+    slides_info.append((sl, 'Resumen Ejecutivo'))
+    txt(sl, 'Solo los Informes Finales de Liquidación (IFL) generan ingreso real; Ajustes y el resto de entregables '
+        'son esfuerzo en proceso (WIP) hacia un futuro IFL.', 0.4, 0.72, 12.5, 0.4, size=10, italic=True, color=C_MID)
+
+    filas_resumen_fin = tabla_resumen_entregables('Resumen Entregables General')
+    fila_ifl = next((f for f in filas_resumen_fin if f[0] == 'Informes Finales de Liquidación'), None)
+    fila_ajustes = next((f for f in filas_resumen_fin if f[0] == 'Ajustes'), None)
+    filas_otros_wip = [f for f in filas_resumen_fin if f[0] not in ('Informes Finales de Liquidación', 'Ajustes')]
+
+    def _totales_de_filas(filas):
+        return (sum(num(f[1]) for f in filas), sum(num(f[2]) for f in filas),
+                sum(num(f[3]) for f in filas), sum(num(f[4]) for f in filas))
+
+    paneles_fin = [
+        ('💰 INGRESOS · IFL', C_NAVY, _totales_de_filas([fila_ifl] if fila_ifl else [])),
+        ('⚙️ WIP · AJUSTES', C_GOLD, _totales_de_filas([fila_ajustes] if fila_ajustes else [])),
+        ('📦 WIP · OTROS ENTREGABLES', RGBColor(0x6B, 0x72, 0x80), _totales_de_filas(filas_otros_wip)),
+    ]
+    ancho_panel, gap_panel, x0_fin = 3.9, 0.3, 0.4
+    for i, (titulo, color, (cp, up, cr, ur)) in enumerate(paneles_fin):
+        x = x0_fin + i * (ancho_panel + gap_panel)
+        pct = (cr / cp * 100) if cp else 0
+        rect(sl, x, 1.3, ancho_panel, 4.9, fill=C_STEEL)
+        rect(sl, x, 1.3, ancho_panel, 0.08, fill=color)
+        txt(sl, titulo, x + 0.25, 1.55, ancho_panel - 0.5, 0.4, size=12.5, bold=True, color=color)
+        txt(sl, f'{cp:.0f}', x + 0.25, 2.15, ancho_panel / 2 - 0.3, 0.75, size=28, bold=True, color=C_NAVY)
+        txt(sl, 'Planificados', x + 0.25, 2.9, ancho_panel / 2 - 0.3, 0.3, size=8.5, color=C_SUB)
+        txt(sl, f'{cr:.0f}', x + ancho_panel / 2 + 0.05, 2.15, ancho_panel / 2 - 0.3, 0.75, size=28, bold=True, color=C_GREEN)
+        txt(sl, 'Realizados', x + ancho_panel / 2 + 0.05, 2.9, ancho_panel / 2 - 0.3, 0.3, size=8.5, color=C_SUB)
+        txt(sl, f'{pct:.0f}% cumplimiento', x + 0.25, 3.4, ancho_panel - 0.5, 0.35, size=11, bold=True, color=C_MID)
+        txt(sl, f'UF planificadas: {up:,.2f}', x + 0.25, 3.95, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
+        txt(sl, f'UF realizadas: {ur:,.2f}', x + 0.25, 4.25, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
+
     # ── Slide: Resumen por Área ──
     sl = blank()
     header(sl, 'Resumen por Área', subtitulo=mes_nombre)
@@ -5153,38 +5221,36 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
             tabla(sl, ['Categoría', 'Plan.', 'Real.', '%'], rows_t, x0, 3.45, 6.0, 3.1,
                   hdr_color=color, col_widths=[4.2, 0.6, 0.6, 0.6], fuente=9)
 
-    # ── Slide: Distribución de Estado del Stock (General) ──
-    grupos = grupos_distribucion('General')
-    if grupos:
+    # ── Slides: Distribución de Estado del Stock — Estado + Sub-estado desagregado ──
+    # Una diapositiva por alcance (General/Ingeniería/Equipo Móvil): una tarjeta por grupo
+    # de Estado con su número grande (cantidad · % del stock) y, debajo, su distribución
+    # interna por sub-estado.
+    for scope_nombre, scope_h2 in [('General', 'General'), ('Ingeniería', 'Ingeniería'), ('Equipo Móvil', 'Equipo Móvil')]:
+        grupos_full = grupos_con_subestados(scope_h2)
+        if not grupos_full:
+            continue
         sl = blank()
-        header(sl, 'Distribución de Estado del Stock', subtitulo='General · ' + mes_nombre)
+        header(sl, 'Distribución de Estado del Stock', subtitulo=f'{scope_nombre} · {mes_nombre}')
         slides_info.append((sl, 'Resumen Ejecutivo'))
-        nombres = [g[0] for g in grupos]
-        pcts = [g[2] for g in grupos]
-        colores_mpl = COLORES_GRUPOS_MPL[:len(grupos)]
-        fig, ax = plt.subplots(figsize=(11.5, 4.6))
-        fig.patch.set_facecolor('white')
-        y_pos = range(len(nombres))
-        barras = ax.barh(y_pos, pcts, color=colores_mpl, height=0.6)
-        ax.set_yticks(y_pos); ax.set_yticklabels(nombres, fontsize=13)
-        ax.invert_yaxis()
-        ax.set_xlabel('% del stock vigente', fontsize=11)
-        ax.set_xlim(0, max(pcts) * 1.45)
-        for bar, g in zip(barras, grupos):
-            etiqueta_casos = '1 caso' if g[1] == 1 else f'{g[1]:.0f} casos'
-            ax.text(bar.get_width() + max(pcts) * 0.02, bar.get_y() + bar.get_height() / 2,
-                    f'{etiqueta_casos} · {g[2]:.1f}% · {g[3]:,.0f} UF', va='center', fontsize=11,
-                    fontweight='bold', color='#1A2635')
-        for spine in ['top', 'right']:
-            ax.spines[spine].set_visible(False)
-        plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150, facecolor='white')
-        plt.close(fig)
-        buf.seek(0)
-        sl.shapes.add_picture(buf, Inches(0.4), Inches(_ry(1.0)), width=Inches(12.5))
-        total_casos = sum(g[1] for g in grupos)
-        txt(sl, f'Stock total vigente: {total_casos:.0f} casos   ·   Fuente: Reporte de acciones, actualizado al {fecha_fuente}',
+
+        ncols = 2 if len(grupos_full) <= 4 else 3
+        nrows = -(-len(grupos_full) // ncols)
+        gap_t, area_w, area_h, x0_t, y0_t = 0.25, 12.5, 5.55, 0.4, 1.05
+        card_w = (area_w - gap_t * (ncols - 1)) / ncols
+        card_h = (area_h - gap_t * (nrows - 1)) / nrows
+        for idx, grupo in enumerate(grupos_full):
+            fila, col = divmod(idx, ncols)
+            cx = x0_t + col * (card_w + gap_t)
+            cy = y0_t + fila * (card_h + gap_t)
+            try:
+                idx_color = int(grupo['nombre'].split('.')[0]) - 1
+            except (ValueError, IndexError):
+                idx_color = len(COLORES_GRUPOS_RGB) - 1
+            color = COLORES_GRUPOS_RGB[idx_color] if 0 <= idx_color < len(COLORES_GRUPOS_RGB) else COLORES_GRUPOS_RGB[-1]
+            tarjeta_estado(sl, cx, cy, card_w, card_h, grupo, color)
+
+        total_casos_scope = sum(g['cantidad'] for g in grupos_full)
+        txt(sl, f'Stock total vigente: {total_casos_scope:.0f} casos   ·   Fuente: Reporte de acciones, actualizado al {fecha_fuente}',
             0.4, 6.75, 12.5, 0.35, size=10, italic=True, color=C_MID)
 
     # ── Slide: Casos Nuevos y Cobertura del Mes ──
