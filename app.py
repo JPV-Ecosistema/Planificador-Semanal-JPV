@@ -4794,6 +4794,479 @@ def generar_pptx_individual(ajustador, df_week, target_week_id, week_id_obj):
         return zf.read(zf.namelist()[0])
 
 
+def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
+    """Genera un PPTX ejecutivo del Reporte de Entregables Mensual: unas pocas diapositivas
+    de "grandes resúmenes" al inicio, y todo el detalle (tablas y gráficas) como respaldo al
+    final. En vez de recalcular por su cuenta toda la lógica de negocio (clasificación de
+    entregables, Distribución de Estado, Cobertura de Planificación, Casos Nuevos), genera
+    primero el mismo Reporte de Entregables en Word y lo parsea: así el PPTX queda siempre
+    consistente con el Word y hereda automáticamente cualquier cambio futuro en sus secciones."""
+    import io
+    import re
+    import os
+    from docx import Document
+    from docx.oxml.ns import qn
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pytz
+
+    word_bytes = generar_reporte_entregables_word(df_mes, mes_opcion, dias_mes_target, tipo_periodo="Mensual")
+    doc = Document(io.BytesIO(word_bytes))
+
+    # --- Parseo del Word en bloques (heading1/2/3 + su tabla o su párrafo de texto) ---
+    def leer_tabla(t):
+        datos = [[c.text.strip() for c in row.cells] for row in t.rows]
+        if not datos or all(all(v == '' for v in fila) for fila in datos):
+            return None
+        return {"headers": datos[0], "rows": datos[1:]}
+
+    # El id interno de los estilos de encabezado (w:pStyle val, ej. "Heading1" o "Ttulo1"
+    # según el entorno/locale que haya generado el .docx) no es estable entre entornos, pero
+    # el NOMBRE del estilo ("Heading 1", "Heading 2", "Title") sí lo es, porque python-docx
+    # siempre pide el estilo por ese nombre en inglés al crear los encabezados con
+    # add_heading(). Por eso se resuelve id -> nombre antes de comparar.
+    mapa_nombres_estilo = {s.style_id: s.name for s in doc.styles if s.style_id}
+
+    h1 = h2 = h3 = None
+    tbl_idx = 0
+    blocks = []
+    tablas_doc = doc.tables
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn('w:p'):
+            texto = ''.join(t.text or '' for t in child.findall('.//' + qn('w:t')))
+            if texto.strip():
+                pPr = child.find(qn('w:pPr'))
+                estilo_id = None
+                if pPr is not None:
+                    pStyle = pPr.find(qn('w:pStyle'))
+                    if pStyle is not None:
+                        estilo_id = pStyle.get(qn('w:val'))
+                estilo = mapa_nombres_estilo.get(estilo_id, estilo_id)
+                if estilo == 'Heading 1':
+                    h1, h2, h3 = texto, None, None
+                elif estilo == 'Heading 2':
+                    h2, h3 = texto, None
+                elif estilo == 'Heading 3':
+                    h3 = texto
+                elif estilo != 'Title':
+                    blocks.append({"h1": h1, "h2": h2, "h3": h3, "caption": texto, "table": None})
+        elif child.tag == qn('w:tbl'):
+            tabla_leida = leer_tabla(tablas_doc[tbl_idx]) if tbl_idx < len(tablas_doc) else None
+            tbl_idx += 1
+            if tabla_leida is not None:
+                blocks.append({"h1": h1, "h2": h2, "h3": h3, "caption": None, "table": tabla_leida})
+
+    def bloque(h1=None, h2=None, h3=None):
+        for b in blocks:
+            if b['h1'] == h1 and b['h2'] == h2 and b['h3'] == h3:
+                return b
+        return None
+
+    def num(s):
+        try:
+            return float(str(s).replace(',', '').replace('UF', '').strip())
+        except Exception:
+            return 0.0
+
+    def parse_grupo_header(texto):
+        m = re.match(r'^(.+?) — ([\d.,]+) · ([\d.,]+)% · ([\d.,]+) UF$', texto)
+        if not m:
+            return None
+        nombre, cant, pct, uf = m.groups()
+        return nombre.strip(), num(cant), num(pct), num(uf)
+
+    def tabla_resumen_entregables(h2):
+        b = bloque(h2=h2)
+        if b is None:
+            return []
+        filas = b['table']['rows']
+        return filas[1:] if filas and filas[0][0] == 'Clasificación' else filas
+
+    def totales_resumen(h2):
+        filas = tabla_resumen_entregables(h2)
+        return (sum(num(f[1]) for f in filas), sum(num(f[2]) for f in filas),
+                sum(num(f[3]) for f in filas), sum(num(f[4]) for f in filas))
+
+    def grupos_distribucion(h2):
+        b = bloque(h1='Distribución de Estado del Stock', h2=h2)
+        if b is None:
+            return []
+        grupos = []
+        for fila in b['table']['rows']:
+            if fila[0] != '' and len(set(fila)) == 1:
+                parsed = parse_grupo_header(fila[0])
+                if parsed:
+                    grupos.append(parsed)
+        return grupos
+
+    def cobertura(h1, h2):
+        b = bloque(h1=h1, h2=h2)
+        if b is None or not b['caption']:
+            return 0.0, 0.0, 0.0, 0.0
+        m = re.search(r'Cantidad: ([\d.,]+) de ([\d.,]+) casos vigentes\s+·\s+Honorarios: ([\d.,]+) / ([\d.,]+) UF', b['caption'])
+        if not m:
+            return 0.0, 0.0, 0.0, 0.0
+        return tuple(num(x) for x in m.groups())
+
+    MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+                'septiembre', 'octubre', 'noviembre', 'diciembre']
+    mes_ref = dias_mes_target[0] if dias_mes_target else datetime.now(pytz.timezone('America/Santiago')).date()
+    mes_nombre = f"{MESES_ES[mes_ref.month - 1].capitalize()} {mes_ref.year}"
+    fuente_bloque = bloque(h1='Distribución de Estado del Stock')
+    fecha_fuente = (fuente_bloque['caption'] or '').replace('Fuente: Reporte de acciones. Fecha en que se actualizó: ', '') if fuente_bloque else ''
+
+    # --- Colores (Plantilla Corporativa JPV, mismos que generar_zip_pptx_equipo) ---
+    C_NAVY       = RGBColor(0x1B, 0x2A, 0x4B)
+    C_NAVY_COVER = RGBColor(0x11, 0x1D, 0x37)
+    C_TEAL       = RGBColor(0x10, 0xAA, 0x9E)
+    C_TEAL_DARK  = RGBColor(0x0D, 0x73, 0x77)
+    C_TEAL_LIGHT = RGBColor(0x9F, 0xD8, 0xD3)
+    C_MUTED_BLUE = RGBColor(0x8F, 0xA0, 0xB5)
+    C_WHITE   = RGBColor(255, 255, 255)
+    C_STEEL   = RGBColor(238, 242, 247)
+    C_TEXT    = RGBColor(26, 38, 53)
+    C_MID     = RGBColor(74, 93, 110)
+    C_SUB     = RGBColor(122, 143, 160)
+    C_GREEN   = RGBColor(30, 125, 58)
+    C_LTGREEN = RGBColor(227, 245, 233)
+    C_GOLD    = RGBColor(184, 148, 60)
+    C_CORAL   = RGBColor(201, 64, 64)
+    COLORES_GRUPOS_MPL = ['#5B2C6F', '#004A99', '#A04000', '#D9534F', '#6B7280']
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    LOGO_PLANTILLA_PATH = os.path.join(BASE_DIR, 'Logo JPV Plantilla.png')
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+
+    _OLD_TOP, _OLD_BOTTOM = 0.58, 7.2
+    _NEW_TOP, _NEW_BOTTOM = 1.12, 7.05
+    _ESCALA_Y = (_NEW_BOTTOM - _NEW_TOP) / (_OLD_BOTTOM - _OLD_TOP)
+
+    def _ry(y):
+        return _NEW_TOP + (y - _OLD_TOP) * _ESCALA_Y
+
+    def _rh(h):
+        return h * _ESCALA_Y
+
+    def blank():
+        return prs.slides.add_slide(prs.slide_layouts[6])
+
+    def rect(sl, x, y, w, h, fill=None, remap=True):
+        if remap:
+            y, h = _ry(y), _rh(h)
+        shp = sl.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
+        if fill:
+            shp.fill.solid(); shp.fill.fore_color.rgb = fill
+        else:
+            shp.fill.background()
+        shp.line.fill.background()
+        return shp
+
+    def txt(sl, text, x, y, w, h, size=11, bold=False, color=None, align=PP_ALIGN.LEFT, italic=False, remap=True):
+        if remap:
+            y, h = _ry(y), _rh(h)
+        txb = sl.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+        tf = txb.text_frame; tf.word_wrap = True
+        p = tf.paragraphs[0]; p.alignment = align
+        run = p.add_run(); run.text = str(text)
+        run.font.size = Pt(size); run.font.bold = bold; run.font.italic = italic
+        if color: run.font.color.rgb = color
+        return txb
+
+    HDR_H = 1.0
+    LOGO_BOX_W = 3.2
+
+    def header(sl, title, bg=C_NAVY, subtitulo=''):
+        rect(sl, 0, 0, 13.33, HDR_H, fill=bg, remap=False)
+        rect(sl, 0, 0, LOGO_BOX_W, HDR_H, fill=C_WHITE, remap=False)
+        if os.path.exists(LOGO_PLANTILLA_PATH):
+            sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.4), Inches(0.26), width=Inches(2.4))
+        rect(sl, LOGO_BOX_W, 0, 0.04, HDR_H, fill=C_TEAL, remap=False)
+        ty = 0.17 if subtitulo else 0.26
+        txt(sl, title, LOGO_BOX_W + 0.3, ty, 9.4, 0.48, size=17, bold=True, color=C_WHITE, remap=False)
+        if subtitulo:
+            txt(sl, subtitulo, LOGO_BOX_W + 0.3, 0.62, 9.4, 0.34, size=10.5, color=C_TEAL_LIGHT, remap=False)
+        rect(sl, 0, HDR_H, 13.33, 0.04, fill=C_TEAL, remap=False)
+
+    def footer(sl, page, total, meta=''):
+        rect(sl, 0, 7.1, 13.33, 0.4, fill=C_TEAL_DARK, remap=False)
+        txt(sl, 'JPV ASOCIADOS  ·  SEDGWICK ALLIANCE', 0.5, 7.21, 4.2, 0.28, size=9, color=C_WHITE, remap=False)
+        if meta:
+            txt(sl, meta, 4.8, 7.21, 6.9, 0.28, size=8, color=C_WHITE, align=PP_ALIGN.CENTER, remap=False)
+        txt(sl, f'{page} / {total}', 12.0, 7.21, 1.1, 0.28, size=8, color=C_WHITE, align=PP_ALIGN.RIGHT, remap=False)
+
+    def pill(sl, label, val, sub_lbl, x, y, val_color=C_NAVY, w=3.0, h=1.3):
+        rect(sl, x, y, w, h, fill=C_STEEL)
+        txt(sl, label, x + 0.1, y + 0.08, w - 0.2, 0.26, size=8.5, bold=True, color=C_SUB, align=PP_ALIGN.CENTER)
+        txt(sl, str(val), x, y + 0.36, w, 0.6, size=28, bold=True, color=val_color, align=PP_ALIGN.CENTER)
+        txt(sl, sub_lbl, x + 0.1, y + 0.98, w - 0.2, 0.26, size=8.5, color=C_SUB, align=PP_ALIGN.CENTER)
+
+    def tabla(sl, headers, rows, x, y, w, h, hdr_color=C_NAVY, alt_color=C_STEEL, col_widths=None,
+              fuente=8, grupo_rows=None, remap=True):
+        if remap:
+            y, h = _ry(y), _rh(h)
+        grupo_rows = grupo_rows or set()
+        tbl_sh = sl.shapes.add_table(len(rows) + 1, len(headers), Inches(x), Inches(y), Inches(w), Inches(h))
+        tbl = tbl_sh.table
+        if col_widths:
+            for i, cw in enumerate(col_widths):
+                tbl.columns[i].width = Inches(cw)
+        for i, hdr in enumerate(headers):
+            c = tbl.cell(0, i); c.text = hdr
+            c.fill.solid(); c.fill.fore_color.rgb = hdr_color
+            p = c.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+            run = p.runs[0] if p.runs else p.add_run()
+            run.font.bold = True; run.font.color.rgb = C_WHITE; run.font.size = Pt(fuente)
+        for ri, row_data in enumerate(rows):
+            es_grupo = ri in grupo_rows
+            bg = hdr_color if es_grupo else (alt_color if ri % 2 == 1 else C_WHITE)
+            if es_grupo:
+                tbl.cell(ri + 1, 0).merge(tbl.cell(ri + 1, len(headers) - 1))
+            for ci, val in enumerate(row_data):
+                if es_grupo and ci > 0:
+                    continue
+                c = tbl.cell(ri + 1, ci)
+                c.text = str(val) if val is not None else ''
+                c.fill.solid(); c.fill.fore_color.rgb = bg
+                p = c.text_frame.paragraphs[0]
+                if es_grupo:
+                    p.alignment = PP_ALIGN.LEFT
+                run = p.runs[0] if p.runs else p.add_run()
+                run.font.size = Pt(fuente + 1 if es_grupo else fuente)
+                run.font.bold = es_grupo
+                run.font.color.rgb = C_WHITE if es_grupo else C_TEXT
+
+    def empty_state(sl, mensaje):
+        rect(sl, 3.8, 2.4, 5.7, 2.4, fill=C_LTGREEN)
+        txt(sl, '✅', 6.2, 2.6, 1.0, 0.7, size=30, align=PP_ALIGN.CENTER)
+        txt(sl, mensaje, 3.9, 3.35, 5.5, 0.55, size=13, bold=True, color=C_GREEN, align=PP_ALIGN.CENTER)
+
+    slides_info = []
+
+    # ── Slide: Portada ──
+    sl = blank()
+    rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY_COVER, remap=False)
+    rect(sl, 0, 0, 13.33, 0.06, fill=C_TEAL, remap=False)
+    rect(sl, 0.52, 0.46, 3.759, 1.0, fill=C_WHITE, remap=False)
+    if os.path.exists(LOGO_PLANTILLA_PATH):
+        sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
+    txt(sl, 'GERENCIA DE LIQUIDACIÓN  ·  REPORTE EJECUTIVO', 0.7, 2.0, 11.0, 0.4, size=13, bold=True, color=C_TEAL, remap=False)
+    txt(sl, 'Resumen de Entregables y Stock', 0.65, 2.5, 11.6, 1.1, size=40, bold=True, color=C_WHITE, remap=False)
+    txt(sl, f'{mes_nombre}  ·  {mes_opcion}', 0.7, 3.6, 10.5, 0.6, size=21, color=C_TEAL_LIGHT, remap=False)
+    rect(sl, 0.7, 5.7, 1.2, 0.02, fill=C_TEAL, remap=False)
+    txt(sl, 'Grandes resúmenes + respaldo con el detalle completo', 0.7, 5.9, 10.0, 0.38, size=13, bold=True, color=C_WHITE, remap=False)
+    txt(sl, f'Fuente: Reporte de Entregables Mensual · Datos actualizados al {fecha_fuente}', 0.7, 6.28, 10.0, 0.35, size=11, color=C_MUTED_BLUE, remap=False)
+
+    # ── Slide: Resumen General de Entregables ──
+    sl = blank()
+    header(sl, 'Resumen General de Entregables', subtitulo=mes_nombre)
+    slides_info.append((sl, 'Resumen Ejecutivo'))
+    cant_plan, uf_plan, cant_real, uf_real = totales_resumen('Resumen Entregables General')
+    pct_cant = (cant_real / cant_plan * 100) if cant_plan else 0
+    pct_uf = (uf_real / uf_plan * 100) if uf_plan else 0
+    pill(sl, 'PLANIFICADOS', int(cant_plan), 'entregables', 0.4, 0.75, val_color=C_NAVY, w=3.0)
+    pill(sl, 'REALIZADOS', int(cant_real), f'{pct_cant:.0f}% cumplimiento', 3.6, 0.75, val_color=C_GREEN, w=3.0)
+    pill(sl, 'UF PLANIFICADAS', f'{uf_plan:,.0f}', 'honorarios', 6.95, 0.75, val_color=C_NAVY, w=3.0)
+    pill(sl, 'UF REALIZADAS', f'{uf_real:,.0f}', f'{pct_uf:.0f}% cumplimiento', 10.15, 0.75, val_color=C_GREEN, w=2.8)
+    filas_resumen = tabla_resumen_entregables('Resumen Entregables General')
+    rows_t = []
+    for f in filas_resumen:
+        cp, cr = num(f[1]), num(f[3])
+        pct = (cr / cp * 100) if cp else 0
+        rows_t.append([f[0], f'{cp:.0f}', f'{cr:.0f}', f'{pct:.0f}%'])
+    if rows_t:
+        tabla(sl, ['Categoría', 'Plan. Cant.', 'Real. Cant.', '% Cumpl.'], rows_t, 0.4, 2.35, 12.5, 4.3,
+              hdr_color=C_NAVY, col_widths=[6.5, 2.0, 2.0, 2.0], fuente=11)
+
+    # ── Slide: Resumen por Área ──
+    sl = blank()
+    header(sl, 'Resumen por Área', subtitulo=mes_nombre)
+    slides_info.append((sl, 'Resumen Ejecutivo'))
+    for i, (area, h2, color) in enumerate([
+        ('Ingeniería', 'Resumen Entregables Ingeniería', C_NAVY),
+        ('Equipo Móvil', 'Resumen Entregables Equipo Móvil', C_TEAL_DARK),
+    ]):
+        cp, up, cr, ur = totales_resumen(h2)
+        pct = (cr / cp * 100) if cp else 0
+        x0 = 0.5 + i * 6.4
+        rect(sl, x0, 0.75, 6.0, 5.9, fill=C_STEEL)
+        rect(sl, x0, 0.75, 6.0, 0.08, fill=color)
+        txt(sl, area.upper(), x0 + 0.3, 1.0, 5.4, 0.35, size=14, bold=True, color=color)
+        txt(sl, f'{cp:.0f}', x0 + 0.3, 1.5, 2.7, 0.9, size=36, bold=True, color=C_NAVY)
+        txt(sl, 'Planificados', x0 + 0.3, 2.35, 2.7, 0.3, size=9, color=C_SUB)
+        txt(sl, f'{cr:.0f}', x0 + 3.1, 1.5, 2.7, 0.9, size=36, bold=True, color=C_GREEN)
+        txt(sl, 'Realizados', x0 + 3.1, 2.35, 2.7, 0.3, size=9, color=C_SUB)
+        txt(sl, f'{pct:.0f}% de cumplimiento   ·   {up:,.0f} UF planificadas   ·   {ur:,.0f} UF realizadas',
+            x0 + 0.3, 2.85, 5.4, 0.4, size=10, bold=True, color=C_MID)
+        filas = tabla_resumen_entregables(h2)
+        rows_t = []
+        for f in filas:
+            c_p, c_r = num(f[1]), num(f[3])
+            pct_f = (c_r / c_p * 100) if c_p else 0
+            rows_t.append([f[0], f'{c_p:.0f}', f'{c_r:.0f}', f'{pct_f:.0f}%'])
+        if rows_t:
+            tabla(sl, ['Categoría', 'Plan.', 'Real.', '%'], rows_t, x0, 3.45, 6.0, 3.1,
+                  hdr_color=color, col_widths=[4.2, 0.6, 0.6, 0.6], fuente=9)
+
+    # ── Slide: Distribución de Estado del Stock (General) ──
+    grupos = grupos_distribucion('General')
+    if grupos:
+        sl = blank()
+        header(sl, 'Distribución de Estado del Stock', subtitulo='General · ' + mes_nombre)
+        slides_info.append((sl, 'Resumen Ejecutivo'))
+        nombres = [g[0] for g in grupos]
+        pcts = [g[2] for g in grupos]
+        colores_mpl = COLORES_GRUPOS_MPL[:len(grupos)]
+        fig, ax = plt.subplots(figsize=(11.5, 4.6))
+        fig.patch.set_facecolor('white')
+        y_pos = range(len(nombres))
+        barras = ax.barh(y_pos, pcts, color=colores_mpl, height=0.6)
+        ax.set_yticks(y_pos); ax.set_yticklabels(nombres, fontsize=13)
+        ax.invert_yaxis()
+        ax.set_xlabel('% del stock vigente', fontsize=11)
+        ax.set_xlim(0, max(pcts) * 1.45)
+        for bar, g in zip(barras, grupos):
+            etiqueta_casos = '1 caso' if g[1] == 1 else f'{g[1]:.0f} casos'
+            ax.text(bar.get_width() + max(pcts) * 0.02, bar.get_y() + bar.get_height() / 2,
+                    f'{etiqueta_casos} · {g[2]:.1f}% · {g[3]:,.0f} UF', va='center', fontsize=11,
+                    fontweight='bold', color='#1A2635')
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+        plt.tight_layout()
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, facecolor='white')
+        plt.close(fig)
+        buf.seek(0)
+        sl.shapes.add_picture(buf, Inches(0.4), Inches(_ry(1.0)), width=Inches(12.5))
+        total_casos = sum(g[1] for g in grupos)
+        txt(sl, f'Stock total vigente: {total_casos:.0f} casos   ·   Fuente: Reporte de acciones, actualizado al {fecha_fuente}',
+            0.4, 6.75, 12.5, 0.35, size=10, italic=True, color=C_MID)
+
+    # ── Slide: Casos Nuevos y Cobertura del Mes ──
+    sl = blank()
+    header(sl, 'Casos Nuevos y Cobertura de Planificación', subtitulo=mes_nombre)
+    slides_info.append((sl, 'Resumen Ejecutivo'))
+    casos_nuevos_tablas = [b for b in blocks if b.get('h1') == '1. Casos Nuevos del Mes' and b.get('table')]
+    n_ing = next((len(b['table']['rows']) for b in casos_nuevos_tablas if 'Ingenier' in b['h2']), 0)
+    n_em = next((len(b['table']['rows']) for b in casos_nuevos_tablas if 'Equipo' in b['h2']), 0)
+    txt(sl, 'CASOS NUEVOS DEL MES', 0.4, 0.72, 6.0, 0.3, size=12, bold=True, color=C_NAVY)
+    pill(sl, 'TOTAL', n_ing + n_em, 'casos nuevos', 0.4, 1.1, val_color=C_NAVY, w=2.6)
+    pill(sl, 'INGENIERÍA', n_ing, 'casos nuevos', 3.15, 1.1, val_color=C_NAVY, w=2.6)
+    pill(sl, 'EQUIPO MÓVIL', n_em, 'casos nuevos', 5.9, 1.1, val_color=C_TEAL_DARK, w=2.6)
+    txt(sl, 'COBERTURA DE PLANIFICACIÓN DEL MES (GENERAL)', 0.4, 2.85, 12.5, 0.3, size=12, bold=True, color=C_NAVY)
+    for i, (titulo, h1n, color) in enumerate([
+        ('Ajuste (Revisión de Cobertura)', 'Cobertura de Planificación del Mes — Ajustes', C_GOLD),
+        ('Informe Final de Liquidación', 'Cobertura de Planificación del Mes — Informes Finales de Liquidación (IFL)', C_NAVY),
+    ]):
+        cant, de, hon, hon_tot = cobertura(h1n, 'General')
+        pct = (cant / de * 100) if de else 0
+        x0 = 0.4 + i * 6.3
+        rect(sl, x0, 3.3, 6.0, 3.0, fill=C_STEEL)
+        txt(sl, titulo, x0 + 0.25, 3.45, 5.5, 0.35, size=12, bold=True, color=color)
+        txt(sl, f'{cant:.0f} de {de:.0f}', x0 + 0.25, 3.9, 5.5, 0.8, size=30, bold=True, color=C_NAVY)
+        txt(sl, f'casos vigentes planificados este mes ({pct:.1f}%)', x0 + 0.25, 4.65, 5.5, 0.35, size=10, color=C_SUB)
+        txt(sl, f'{hon:,.2f} UF de {hon_tot:,.2f} UF del stock vigente', x0 + 0.25, 5.15, 5.5, 0.35, size=11, bold=True, color=C_MID)
+
+    # ── Divisor: Respaldo ──
+    sl = blank()
+    rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY_COVER, remap=False)
+    rect(sl, 0, 0, 13.33, 0.06, fill=C_TEAL, remap=False)
+    rect(sl, 0.52, 0.46, 3.759, 1.0, fill=C_WHITE, remap=False)
+    if os.path.exists(LOGO_PLANTILLA_PATH):
+        sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
+    txt(sl, 'RESPALDO', 0.7, 2.6, 10.0, 0.8, size=44, bold=True, color=C_WHITE, remap=False)
+    txt(sl, 'Detalle completo', 0.7, 3.5, 10.0, 0.6, size=19, color=C_TEAL_LIGHT, remap=False)
+    rect(sl, 0.7, 4.3, 1.2, 0.02, fill=C_TEAL, remap=False)
+    txt(sl, 'Todas las tablas y gráficas del Reporte de Entregables Mensual, caso por caso.', 0.7, 4.5, 10.0, 0.4, size=12, color=C_MUTED_BLUE, remap=False)
+
+    # ── Respaldo: una o más diapositivas por cada bloque del Word, en el mismo orden ──
+    def titulo_bloque(b):
+        return ' · '.join(x for x in [b['h1'], b['h2'], b['h3']] if x)
+
+    def normalizar_tabla_resumen(t):
+        headers, rows = t['headers'], t['rows']
+        if rows and rows[0][0] == 'Clasificación':
+            headers = ['Categoría', 'Plan. Cant.', 'Plan. UF', 'Real. Cant.', 'Real. UF']
+            rows = rows[1:]
+        return headers, rows
+
+    def color_por_bloque(b):
+        h3 = b.get('h3') or ''
+        if h3.startswith('Entregados'):
+            return C_GREEN
+        if h3.startswith('No Entregados'):
+            return C_CORAL
+        if b.get('h1') == '10. Carga de Trabajo por Ajustador':
+            return C_TEAL_DARK
+        return C_NAVY
+
+    def render_tabla_block(b):
+        titulo = titulo_bloque(b)
+        headers, rows = b['table']['headers'], b['table']['rows']
+        if headers[0] == 'Clasificación':
+            headers, rows = normalizar_tabla_resumen(b['table'])
+        grupo_rows_todas = {i for i, r in enumerate(rows) if r[0] != '' and len(set(r)) == 1}
+        ncols = len(headers)
+        max_filas = 14 if ncols >= 6 else 18
+        color = color_por_bloque(b)
+        total_paginas = max(1, -(-len(rows) // max_filas))
+        for pag in range(total_paginas):
+            chunk = rows[pag * max_filas:(pag + 1) * max_filas]
+            grupo_rows = {i for i in range(len(chunk)) if (pag * max_filas + i) in grupo_rows_todas}
+            sl = blank()
+            t_tit = titulo if total_paginas == 1 else f'{titulo} (cont. {pag + 1}/{total_paginas})'
+            header(sl, t_tit[:95])
+            slides_info.append((sl, 'Respaldo'))
+            n = len(chunk)
+            alto = min(5.85, n * 0.4 + 0.4)
+            fuente = 9 if ncols <= 5 else 7.5
+            tabla(sl, headers, chunk, 0.3, 0.72, 12.7, alto, hdr_color=color, fuente=fuente, grupo_rows=grupo_rows)
+
+    def render_texto_block(b):
+        titulo = titulo_bloque(b)
+        sl = blank()
+        header(sl, titulo[:95])
+        slides_info.append((sl, 'Respaldo'))
+        es_ok = 'realizad' in b['caption'].lower() or 'Sin entregables' in b['caption']
+        if es_ok:
+            empty_state(sl, b['caption'])
+        else:
+            txt(sl, b['caption'], 0.6, 2.8, 12.1, 1.5, size=16, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+
+    for b in blocks:
+        if b['table'] is not None:
+            render_tabla_block(b)
+        else:
+            render_texto_block(b)
+
+    # ── Cierre ──
+    sl = blank()
+    rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY_COVER, remap=False)
+    rect(sl, 0, 0, 13.33, 0.06, fill=C_TEAL, remap=False)
+    rect(sl, 0.52, 0.46, 3.759, 1.0, fill=C_WHITE, remap=False)
+    if os.path.exists(LOGO_PLANTILLA_PATH):
+        sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
+    txt(sl, 'Gracias', 0.7, 2.6, 10.0, 1.2, size=50, bold=True, color=C_WHITE, remap=False)
+    txt(sl, 'Preguntas', 0.7, 3.8, 10.0, 0.6, size=19, color=C_TEAL_LIGHT, remap=False)
+    rect(sl, 0.7, 4.6, 1.2, 0.02, fill=C_TEAL, remap=False)
+    txt(sl, 'JPV Asociados · Sedgwick Alliance', 0.7, 4.85, 10.0, 0.4, size=14, bold=True, color=C_WHITE, remap=False)
+    txt(sl, f'Reporte Ejecutivo · {mes_nombre}', 0.7, 5.25, 10.0, 0.6, size=11, color=C_MUTED_BLUE, remap=False)
+
+    for i, (slide, meta) in enumerate(slides_info, start=1):
+        footer(slide, i, len(slides_info), meta)
+
+    pptx_buf = io.BytesIO()
+    prs.save(pptx_buf)
+    return pptx_buf.getvalue()
+
+
 # ---------------------------------------------------------
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
@@ -5451,6 +5924,22 @@ def vista_reportes():
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     type="primary",
                     key="dl_entregables_mensual"
+                )
+            except Exception as e:
+                st.error(f"Error al generar el reporte: {e}")
+
+        st.markdown("### 📊 Reporte Ejecutivo (PPTX)")
+        st.info("Genera una presentación PowerPoint a partir del Reporte de Entregables del Mes: unas pocas diapositivas de grandes resúmenes al inicio (Entregables, por Área, Distribución de Estado, Casos Nuevos y Cobertura) y todo el detalle completo —tablas y gráficas— como respaldo al final.")
+        if st.button("📥 Generar Reporte Ejecutivo del Mes (PPTX)", type="primary", use_container_width=True, key="btn_gen_ejecutivo_mensual"):
+            try:
+                pptx_bytes_mes = generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target)
+                st.download_button(
+                    label="⬇️ Descargar Reporte Ejecutivo del Mes",
+                    data=pptx_bytes_mes,
+                    file_name=f"Reporte_Ejecutivo_Mensual_{target_month_id}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    type="primary",
+                    key="dl_ejecutivo_mensual"
                 )
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
