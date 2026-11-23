@@ -4238,8 +4238,14 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
     tz_chile = pytz.timezone('America/Santiago')
     hoy = datetime.now(tz_chile).date()
 
-    # ── Colores ──
-    C_NAVY    = RGBColor(0, 51, 102)
+    # ── Colores (alineados a la Plantilla Corporativa JPV · Logo Fondo Blanco) ──
+    C_NAVY       = RGBColor(0x1B, 0x2A, 0x4B)  # navy de marca (header de contenido, títulos, tablas)
+    C_NAVY_COVER = RGBColor(0x11, 0x1D, 0x37)  # navy oscuro de fondo en Portada/Cierre
+    C_TEAL       = RGBColor(0x10, 0xAA, 0x9E)  # acento teal (divisor, regla, eyebrow)
+    C_TEAL_DARK  = RGBColor(0x0D, 0x73, 0x77)  # teal del footer
+    C_TEAL_LIGHT = RGBColor(0x9F, 0xD8, 0xD3)  # teal claro (subtítulo Portada/Cierre)
+    C_SLATE_LT   = RGBColor(0xC7, 0xD0, 0xDA)  # gris-azulado claro (descripción Portada)
+    C_MUTED_BLUE = RGBColor(0x8F, 0xA0, 0xB5)  # gris-azulado apagado (tagline Portada/Cierre)
     C_NAVY2   = RGBColor(0, 74, 153)
     C_GOLD    = RGBColor(184, 148, 60)
     C_CORAL   = RGBColor(201, 64, 64)
@@ -4256,6 +4262,23 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
     C_ALTRED  = RGBColor(253, 242, 242)
 
     MAX_ROWS = 14  # máximo de filas por tabla para evitar desborde
+
+    # ── Remapeo vertical de la zona de contenido ──
+    # El header/footer de la Plantilla Corporativa son más altos que los antiguos (header
+    # 0.58"→1.04", footer 0.3"→0.4"), así que la zona de contenido disponible se reduce.
+    # En vez de reescribir cada coordenada Y de cada slide a mano, rect()/txt()/tabla()/pill()
+    # remapean automáticamente (afín, preserva proporciones) cualquier Y/alto definido en la
+    # zona antigua (0.58"-7.2") a la zona nueva (1.12"-7.05"). Portada y Cierre son a página
+    # completa y no usan esta zona, por eso pasan remap=False.
+    _OLD_TOP, _OLD_BOTTOM = 0.58, 7.2
+    _NEW_TOP, _NEW_BOTTOM = 1.12, 7.05
+    _ESCALA_Y = (_NEW_BOTTOM - _NEW_TOP) / (_OLD_BOTTOM - _OLD_TOP)
+
+    def _ry(y):
+        return _NEW_TOP + (y - _OLD_TOP) * _ESCALA_Y
+
+    def _rh(h):
+        return h * _ESCALA_Y
 
     # ── Cargar Base Maestra para casos sin movimiento ──
     df_bm = pd.DataFrame()
@@ -4320,7 +4343,9 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
     def blank(prs):
         return prs.slides.add_slide(prs.slide_layouts[6])
 
-    def rect(sl, x, y, w, h, fill=None, line=None, line_w=0.5):
+    def rect(sl, x, y, w, h, fill=None, line=None, line_w=0.5, remap=True):
+        if remap:
+            y, h = _ry(y), _rh(h)
         shp = sl.shapes.add_shape(1, Inches(x), Inches(y), Inches(w), Inches(h))
         if fill:
             shp.fill.solid(); shp.fill.fore_color.rgb = fill
@@ -4332,7 +4357,9 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             shp.line.fill.background()
         return shp
 
-    def txt(sl, text, x, y, w, h, size=11, bold=False, color=None, align=PP_ALIGN.LEFT, italic=False):
+    def txt(sl, text, x, y, w, h, size=11, bold=False, color=None, align=PP_ALIGN.LEFT, italic=False, remap=True):
+        if remap:
+            y, h = _ry(y), _rh(h)
         txb = sl.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
         tf = txb.text_frame; tf.word_wrap = True
         p = tf.paragraphs[0]; p.alignment = align
@@ -4342,28 +4369,30 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         return txb
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    LOGO1_PATH = os.path.join(BASE_DIR, 'Logo JPV1.png')  # portada (tipografía blanca → fondo oscuro)
-    LOGO2_PATH = os.path.join(BASE_DIR, 'Logo JPV2.png')  # slides internas (fondo blanco)
+    LOGO_PLANTILLA_PATH = os.path.join(BASE_DIR, 'Logo JPV Plantilla.png')  # JPV · Sedgwick Alliance (plantilla corporativa)
 
-    # Logo JPV2: 862x176px, ratio≈4.9:1 → a w=2.1" la altura es ≈0.43", cabe en header de 0.58"
-    _LOGO2_W = 2.1
-    _LOGO2_X = 13.33 - _LOGO2_W - 0.08  # pegado al borde derecho
+    # Geometría del header de contenido tomada de la Plantilla Corporativa JPV (layout "3 Contenido")
+    _HDR_H = 1.0
+    _LOGO_BOX_W = 3.2
+    _LOGO_IMG_X, _LOGO_IMG_Y, _LOGO_IMG_W = 0.4, 0.26, 2.4
 
     def header(sl, title, bg):
-        """Header sin texto derecho — el logo JPV2 ocupa esa esquina con fondo blanco."""
-        rect(sl, 0, 0, 13.33, 0.58, fill=bg)
-        txt(sl, title, 0.25, 0.1, 10.8, 0.42, size=14, bold=True, color=C_WHITE)
-        # Fondo blanco + logo en esquina superior derecha dentro del header
-        if os.path.exists(LOGO2_PATH):
-            rect(sl, _LOGO2_X - 0.07, 0.05, _LOGO2_W + 0.14, 0.48, fill=C_WHITE)
-            sl.shapes.add_picture(LOGO2_PATH, Inches(_LOGO2_X), Inches(0.10), width=Inches(_LOGO2_W))
+        """Header de contenido con el patrón de la Plantilla Corporativa JPV: caja de logo
+        con fondo blanco a la izquierda, divisor teal, título en blanco, regla teal al pie."""
+        rect(sl, 0, 0, 13.33, _HDR_H, fill=bg, remap=False)
+        rect(sl, 0, 0, _LOGO_BOX_W, _HDR_H, fill=C_WHITE, remap=False)
+        if os.path.exists(LOGO_PLANTILLA_PATH):
+            sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(_LOGO_IMG_X), Inches(_LOGO_IMG_Y), width=Inches(_LOGO_IMG_W))
+        rect(sl, _LOGO_BOX_W, 0, 0.04, _HDR_H, fill=C_TEAL, remap=False)
+        txt(sl, title, _LOGO_BOX_W + 0.3, 0.26, 9.4, 0.48, size=17, bold=True, color=C_WHITE, remap=False)
+        rect(sl, 0, _HDR_H, 13.33, 0.04, fill=C_TEAL, remap=False)
 
     def footer(sl, page, total, meta=''):
-        rect(sl, 0, 7.2, 13.33, 0.3, fill=C_STEEL)
-        txt(sl, 'Planificador Semanal JPV', 0.25, 7.22, 4, 0.24, size=8, color=C_SUB)
+        rect(sl, 0, 7.1, 13.33, 0.4, fill=C_TEAL_DARK, remap=False)
+        txt(sl, 'JPV ASOCIADOS  ·  SEDGWICK ALLIANCE', 0.5, 7.21, 4.2, 0.28, size=9, color=C_WHITE, remap=False)
         if meta:
-            txt(sl, meta, 4.3, 7.22, 7.5, 0.24, size=8, color=C_SUB, align=PP_ALIGN.CENTER)
-        txt(sl, f'{page} / {total}', 12.0, 7.22, 1.1, 0.24, size=8, color=C_SUB, align=PP_ALIGN.RIGHT)
+            txt(sl, meta, 4.8, 7.21, 6.9, 0.28, size=8, color=C_WHITE, align=PP_ALIGN.CENTER, remap=False)
+        txt(sl, f'{page} / {total}', 12.0, 7.21, 1.1, 0.28, size=8, color=C_WHITE, align=PP_ALIGN.RIGHT, remap=False)
 
     def logo_slide(sl):
         pass  # ahora el logo va integrado en header()
@@ -4422,10 +4451,12 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         extra = len(rows) - (max_r - 1)
         return rows[:max_r - 1] + [('...',) + ('',) * (len(rows[0]) - 2) + (f'(+ {extra} más)',)]
 
-    def tabla(sl, headers, rows, x, y, w, h, hdr_color, alt_color=C_STEEL, col_widths=None):
+    def tabla(sl, headers, rows, x, y, w, h, hdr_color, alt_color=C_STEEL, col_widths=None, remap=True):
         if not rows:
             return
         rows = truncar_rows(rows)
+        if remap:
+            y, h = _ry(y), _rh(h)
         tbl_sh = sl.shapes.add_table(len(rows) + 1, len(headers), Inches(x), Inches(y), Inches(w), Inches(h))
         tbl = tbl_sh.table
         if col_widths:
@@ -4489,20 +4520,19 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             prs = new_prs()
             meta = f'{ajustador} · {target_week_id}'
 
-            # ── Slide 1: Portada ──
+            # ── Slide 1: Portada (layout "1 Portada" de la Plantilla Corporativa JPV) ──
             sl = blank(prs)
-            rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY)
-            rect(sl, 8.0, 0, 5.33, 7.5, fill=RGBColor(0, 38, 80))
-            rect(sl, 0, 0, 0.22, 7.5, fill=C_GOLD)
-            txt(sl, 'GERENCIA DE LIQUIDACIÓN  ·  SEMANA PASADA', 0.5, 1.3, 7.3, 0.35, size=9, bold=True, color=C_GOLD)
-            txt(sl, str(ajustador), 0.5, 1.85, 7.2, 1.3, size=36, bold=True, color=C_WHITE)
-            txt(sl, 'Ajustador Senior de Seguros', 0.5, 3.2, 7.2, 0.4, size=13, color=RGBColor(138, 170, 200))
-            txt(sl, f'Semana  {target_week_id}', 0.5, 3.85, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
-            txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}', 0.5, 4.25, 7.2, 0.3, size=11, color=RGBColor(100, 140, 175))
-            # Logo portada: esquina inferior izquierda — tipografía blanca visible sobre fondo navy
-            # JPV1: 1351x208px, ratio 6.5:1 → w=3.8" → h≈0.58" — sin fondo blanco
-            if os.path.exists(LOGO1_PATH):
-                sl.shapes.add_picture(LOGO1_PATH, Inches(0.42), Inches(6.0), width=Inches(3.8))
+            rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY_COVER, remap=False)
+            rect(sl, 0, 0, 13.33, 0.06, fill=C_TEAL, remap=False)
+            rect(sl, 0.52, 0.46, 3.759, 1.0, fill=C_WHITE, remap=False)
+            if os.path.exists(LOGO_PLANTILLA_PATH):
+                sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
+            txt(sl, 'GERENCIA DE LIQUIDACIÓN  ·  SEMANA PASADA', 0.7, 2.0, 11.0, 0.4, size=13, bold=True, color=C_TEAL, remap=False)
+            txt(sl, str(ajustador), 0.65, 2.5, 11.6, 1.1, size=44, bold=True, color=C_WHITE, remap=False)
+            txt(sl, 'Ajustador Senior de Seguros', 0.7, 3.6, 10.5, 0.6, size=21, color=C_TEAL_LIGHT, remap=False)
+            rect(sl, 0.7, 5.7, 1.2, 0.02, fill=C_TEAL, remap=False)
+            txt(sl, f'Semana  {target_week_id}', 0.7, 5.9, 10.0, 0.38, size=13, bold=True, color=C_WHITE, remap=False)
+            txt(sl, f'Generado el  {hoy.strftime("%d/%m/%Y")}  ·  Planificador Semanal JPV', 0.7, 6.28, 10.0, 0.35, size=11, color=C_MUTED_BLUE, remap=False)
 
             # ── Slide 2: Financiero ──
             # FIX 2: tablas detalle en cada panel para eliminar espacio en blanco
@@ -4573,8 +4603,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             pill(sl, 'ADICIONALES',   t_np,          'no programadas', 9.85, 0.73, val_color=C_NAVY)
             # FIX 1: pasar solo width para respetar proporción del velocímetro
             try:
-                sl.shapes.add_picture(gauge_img(adh, 'Adherencia al Plan'), Inches(0.55), Inches(2.05), width=Inches(5.9))
-                sl.shapes.add_picture(pie_planificado_img(pct_plan, pct_no_plan, 'Planificado vs No Planificado'), Inches(7.6), Inches(2.05), width=Inches(4.5))
+                sl.shapes.add_picture(gauge_img(adh, 'Adherencia al Plan'), Inches(0.55), Inches(_ry(2.05)), width=Inches(5.9 * _ESCALA_Y))
+                sl.shapes.add_picture(pie_planificado_img(pct_plan, pct_no_plan, 'Planificado vs No Planificado'), Inches(7.6), Inches(_ry(2.05)), width=Inches(4.5 * _ESCALA_Y))
             except Exception:
                 txt(sl, f'Adherencia: {adh:.1f}%',        0.7, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
                 txt(sl, f'Planificado: {pct_plan:.1f}%',   7.0, 3.8, 5.7, 0.5, size=22, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
@@ -4731,6 +4761,19 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             else:
                 empty_state(sl, 'Sin casos con más de 21 días sin movimiento',
                             'Todos los casos registran actividad reciente en el período.')
+
+            # ── Slide 8: Cierre (layout "9 Cierre" de la Plantilla Corporativa JPV) ──
+            sl = blank(prs)
+            rect(sl, 0, 0, 13.33, 7.5, fill=C_NAVY_COVER, remap=False)
+            rect(sl, 0, 0, 13.33, 0.06, fill=C_TEAL, remap=False)
+            rect(sl, 0.52, 0.46, 3.759, 1.0, fill=C_WHITE, remap=False)
+            if os.path.exists(LOGO_PLANTILLA_PATH):
+                sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
+            txt(sl, 'Gracias', 0.7, 2.6, 10.0, 1.2, size=50, bold=True, color=C_WHITE, remap=False)
+            txt(sl, 'Preguntas', 0.7, 3.8, 10.0, 0.6, size=19, color=C_TEAL_LIGHT, remap=False)
+            rect(sl, 0.7, 4.6, 1.2, 0.02, fill=C_TEAL, remap=False)
+            txt(sl, 'JPV Asociados · Sedgwick Alliance', 0.7, 4.85, 10.0, 0.4, size=14, bold=True, color=C_WHITE, remap=False)
+            txt(sl, f'Reporte Semanal de {ajustador} · Semana {target_week_id}', 0.7, 5.25, 10.0, 0.6, size=11, color=C_MUTED_BLUE, remap=False)
 
             # ── Guardar en ZIP ──
             pptx_buf = io.BytesIO()
