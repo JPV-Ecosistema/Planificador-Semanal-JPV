@@ -5759,6 +5759,26 @@ def vista_reportes():
 
     st.title("📊 Tablero de Control y Planificación")
 
+    # --- Helpers del "Centro de Descargas": tarjetas de reporte agrupadas por tema ---
+    C_BADGE_WORD = ('#2B579A', '#EAF1FB')
+    C_BADGE_PPTX = ('#C0401B', '#FDEEE8')
+
+    def _grupo_descargas(titulo, color_borde):
+        st.markdown(f'<div class="marco-gestion" style="border-left-color:{color_borde}; margin-top:18px;"><h4 style="margin:0;">{titulo}</h4></div>', unsafe_allow_html=True)
+
+    def _fila_descarga(badge_texto, badge_colores, titulo, descripcion):
+        color_fg, color_bg = badge_colores
+        col_b, col_i = st.columns([1, 7])
+        with col_b:
+            st.markdown(
+                f'<div style="margin-top:6px; text-align:center; background:{color_bg}; color:{color_fg}; '
+                f'font-size:10px; font-weight:700; letter-spacing:.03em; padding:4px 6px; border-radius:12px;">{badge_texto}</div>',
+                unsafe_allow_html=True
+            )
+        with col_i:
+            st.markdown(f"**{titulo}**")
+            st.caption(descripcion)
+
     tab_semanal, tab_mensual = st.tabs(["📅 Reportes Semanales", "🗓️ Reportes Mensuales"])
 
     with tab_semanal:
@@ -5793,11 +5813,10 @@ def vista_reportes():
         # 4.2 Llamada al motor de datos
         df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
 
-        tab_dashboard, tab_operacional, tab_gantt, tab_sin_mov = st.tabs([
+        tab_dashboard, tab_operacional, tab_gantt = st.tabs([
             "📈 Dashboard Ejecutivo (BI)",
             "📋 Reporte Operacional de Equipo",
             "📊 Carta Gantt Operativa",
-            "🔴 Casos Sin Movimiento"
         ])
 
         with tab_dashboard:
@@ -5806,39 +5825,24 @@ def vista_reportes():
             renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
         with tab_gantt:
             renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
-        with tab_sin_mov:
-            st.markdown("### 🔴 Casos Sin Movimiento (> 21 días)")
-            st.info("Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
-            if st.button("📥 Generar Reporte Casos Sin Movimiento (WORD)", type="primary", use_container_width=True, key="btn_sin_mov"):
-                with st.spinner("Analizando casos..."):
-                    try:
-                        word_bytes, error_msg = generar_reporte_sin_movimiento_word(df_raw)
-                        if error_msg:
-                            st.error(error_msg)
-                        else:
-                            st.download_button(
-                                label="⬇️ Descargar Reporte Casos Sin Movimiento",
-                                data=word_bytes,
-                                file_name=f"Casos_Sin_Movimiento_{target_week_id}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                type="primary",
-                                key="dl_sin_mov"
-                            )
-                    except Exception as e:
-                        st.error(f"Error al generar el reporte: {e}")
 
-        # --- REPORTE DE ENTREGABLES: PLANIFICADO (Semana Actual) / EJECUTADO (Semana Pasada) ---
         if week_id_obj in ("Semana Actual", "Semana Pasada"):
             st.markdown("---")
             renderizar_observaciones_sin_preliminar()
-            st.markdown("---")
+
+        # --- CENTRO DE DESCARGAS: reportes agrupados por tema, en vez de una lista de botones ---
+        st.markdown("---")
+        st.subheader("📥 Centro de Descargas")
+
+        if week_id_obj in ("Semana Actual", "Semana Pasada"):
+            _grupo_descargas("📦 Entregables", "#10AA9E")
             if week_id_obj == "Semana Pasada":
-                st.markdown("### 📄 Reporte de Entregables Ejecutados (Semana Pasada)")
-                st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos, separados por estado de cumplimiento.")
+                _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
+                                "Informes Finales, Intermedios y Preliminares comprometidos esta semana, separados por estado de cumplimiento.")
             else:
-                st.markdown("### 📄 Reporte de Entregables Planificados (Semana Actual)")
-                st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
-            if st.button("📥 Generar Reporte de Entregables (WORD)", type="primary", use_container_width=True, key="btn_gen_entregables_semanal"):
+                _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
+                                "Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
+            if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_entregables_semanal"):
                 try:
                     word_bytes = generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target, tipo_periodo="Semanal")
                     st.download_button(
@@ -5852,9 +5856,9 @@ def vista_reportes():
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
-            st.markdown("### 📋 Reporte de Preliminares Pendientes")
-            st.info("Genera un documento Word solo con los casos vigentes sin Informe Preliminar completado, incluyendo la fecha de inspección (agendada o realizada).")
-            if st.button("📥 Generar Reporte de Preliminares Pendientes (WORD)", type="primary", use_container_width=True, key="btn_gen_preliminares_semanal"):
+            _fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
+                            "Casos vigentes sin Informe Preliminar completado, con fecha de inspección (agendada o realizada).")
+            if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_preliminares_semanal"):
                 try:
                     word_bytes_prelim = generar_reporte_preliminares_pendientes_word()
                     st.download_button(
@@ -5865,6 +5869,27 @@ def vista_reportes():
                         type="primary",
                         key="dl_preliminares_semanal"
                     )
+                except Exception as e:
+                    st.error(f"Error al generar el reporte: {e}")
+
+        _grupo_descargas("🔴 Seguimiento de Casos", "#D9534F")
+        _fila_descarga("WORD", C_BADGE_WORD, "Casos Sin Movimiento (> 21 días)",
+                        "Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
+        if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_sin_mov"):
+            with st.spinner("Analizando casos..."):
+                try:
+                    word_bytes, error_msg = generar_reporte_sin_movimiento_word(df_raw)
+                    if error_msg:
+                        st.error(error_msg)
+                    else:
+                        st.download_button(
+                            label="⬇️ Descargar Reporte Casos Sin Movimiento",
+                            data=word_bytes,
+                            file_name=f"Casos_Sin_Movimiento_{target_week_id}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary",
+                            key="dl_sin_mov"
+                        )
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
@@ -5906,15 +5931,18 @@ def vista_reportes():
         st.markdown("---")
         renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion)
 
-        # --- REPORTE DE ENTREGABLES DEL MES (WORD) ---
+        # --- CENTRO DE DESCARGAS: reportes del mes agrupados por tema ---
         st.markdown("---")
+        st.subheader("📥 Centro de Descargas")
+        _grupo_descargas("📦 Entregables", "#10AA9E")
+
         if mes_opcion == "Mes Pasado":
-            st.markdown("### 📄 Reporte de Entregables Ejecutados (Mes Pasado)")
-            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares comprometidos durante el mes, separados por estado de cumplimiento.")
+            _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
+                            "Informes Finales, Intermedios y Preliminares comprometidos durante el mes, separados por estado de cumplimiento.")
         else:
-            st.markdown("### 📄 Reporte de Entregables Planificados (Mes Actual)")
-            st.info("Genera un documento Word con el detalle de Informes Finales, Intermedios y Preliminares planificados para este mes, separados por estado de cumplimiento a la fecha.")
-        if st.button("📥 Generar Reporte de Entregables del Mes (WORD)", type="primary", use_container_width=True, key="btn_gen_entregables_mensual"):
+            _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
+                            "Informes Finales, Intermedios y Preliminares planificados para este mes, separados por estado de cumplimiento a la fecha.")
+        if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_entregables_mensual"):
             try:
                 word_bytes_mes = generar_reporte_entregables_word(df_mes, mes_opcion, dias_mes_target, tipo_periodo="Mensual")
                 st.download_button(
@@ -5928,9 +5956,9 @@ def vista_reportes():
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
 
-        st.markdown("### 📊 Reporte Ejecutivo (PPTX)")
-        st.info("Genera una presentación PowerPoint a partir del Reporte de Entregables del Mes: unas pocas diapositivas de grandes resúmenes al inicio (Entregables, por Área, Distribución de Estado, Casos Nuevos y Cobertura) y todo el detalle completo —tablas y gráficas— como respaldo al final.")
-        if st.button("📥 Generar Reporte Ejecutivo del Mes (PPTX)", type="primary", use_container_width=True, key="btn_gen_ejecutivo_mensual"):
+        _fila_descarga("PPTX", C_BADGE_PPTX, "Reporte Ejecutivo del Mes",
+                        "Grandes resúmenes (Entregables, por Área, Distribución de Estado, Casos Nuevos y Cobertura) + todo el detalle como respaldo al final.")
+        if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_ejecutivo_mensual"):
             try:
                 pptx_bytes_mes = generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target)
                 st.download_button(
@@ -5944,9 +5972,9 @@ def vista_reportes():
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
 
-        st.markdown("### 📋 Reporte de Preliminares Pendientes")
-        st.info("Genera un documento Word solo con los casos vigentes sin Informe Preliminar completado, incluyendo la fecha de inspección (agendada o realizada).")
-        if st.button("📥 Generar Reporte de Preliminares Pendientes (WORD)", type="primary", use_container_width=True, key="btn_gen_preliminares_mensual"):
+        _fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
+                        "Casos vigentes sin Informe Preliminar completado, con fecha de inspección (agendada o realizada).")
+        if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_preliminares_mensual"):
             try:
                 word_bytes_prelim_mes = generar_reporte_preliminares_pendientes_word()
                 st.download_button(
