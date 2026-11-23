@@ -54,6 +54,32 @@ init_system()
 apply_custom_styles()
 
 # ---------------------------------------------------------
+# HELPERS DEL "CENTRO DE DESCARGAS": tarjetas de reporte agrupadas por tema,
+# reutilizados por todas las vistas que ofrecen reportes para descargar.
+# ---------------------------------------------------------
+C_BADGE_WORD = ('#2B579A', '#EAF1FB')
+C_BADGE_EXCEL = ('#1D6F42', '#E9F6EE')
+C_BADGE_PPTX = ('#C0401B', '#FDEEE8')
+C_BADGE_ZIP = ('#5B2C6F', '#F1E9F5')
+C_BADGE_CSV = ('#475569', '#EEF1F4')
+
+def grupo_descargas(titulo, color_borde):
+    st.markdown(f'<div class="marco-gestion" style="border-left-color:{color_borde}; margin-top:18px;"><h4 style="margin:0;">{titulo}</h4></div>', unsafe_allow_html=True)
+
+def fila_descarga(badge_texto, badge_colores, titulo, descripcion):
+    color_fg, color_bg = badge_colores
+    col_b, col_i = st.columns([1, 7])
+    with col_b:
+        st.markdown(
+            f'<div style="margin-top:6px; text-align:center; background:{color_bg}; color:{color_fg}; '
+            f'font-size:10px; font-weight:700; letter-spacing:.03em; padding:4px 6px; border-radius:12px;">{badge_texto}</div>',
+            unsafe_allow_html=True
+        )
+    with col_i:
+        st.markdown(f"**{titulo}**")
+        st.caption(descripcion)
+
+# ---------------------------------------------------------
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
 # VERSIÓN: 2.1.5 (Advertencia de Filtros en Reporte de Acciones)
 # ---------------------------------------------------------
@@ -2104,24 +2130,28 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     word_dash_buffer = io.BytesIO()
     dash_doc.save(word_dash_buffer)
     
-    # --- BOTONES DE DESCARGA EJECUTIVO ---
+    # --- CENTRO DE DESCARGAS ---
     st.markdown("---")
-    st.markdown("### Opciones de Exportación Dashboard")
-    col_d1, col_d2, col_d3 = st.columns(3)
-    with col_d1:
-        st.download_button(
-            label="📥 DESCARGAR DASHBOARD (EXCEL)", 
-            data=excel_dash_buffer.getvalue(), 
-            file_name=f"Dashboard_Ejecutivo_{target_week_id}.xlsx", 
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    with col_d2:
-        st.download_button(
-            label="📥 DESCARGAR DASHBOARD (WORD)", 
-            data=word_dash_buffer.getvalue(), 
-            file_name=f"Resumen_Ejecutivo_{target_week_id}.docx", 
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+    st.subheader("📥 Centro de Descargas")
+    grupo_descargas("📈 Dashboard Ejecutivo", "#10AA9E")
+    fila_descarga("EXCEL", C_BADGE_EXCEL, "Dashboard Ejecutivo",
+                  "Mismos indicadores del BI en formato editable para análisis propio.")
+    st.download_button(
+        label="⬇️ Descargar Dashboard (Excel)",
+        data=excel_dash_buffer.getvalue(),
+        file_name=f"Dashboard_Ejecutivo_{target_week_id}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary"
+    )
+    fila_descarga("WORD", C_BADGE_WORD, "Resumen Ejecutivo",
+                  "Versión imprimible del dashboard de indicadores (BI) de la semana.")
+    st.download_button(
+        label="⬇️ Descargar Dashboard (Word)",
+        data=word_dash_buffer.getvalue(),
+        file_name=f"Resumen_Ejecutivo_{target_week_id}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        type="primary"
+    )
 
 # ---------------------------------------------------------
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
@@ -2137,27 +2167,6 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
 
     st.markdown("### 📋 Radiografía Operacional por Ajustador")
     st.markdown("Análisis individual para reuniones de seguimiento: Embudo, Cumplimiento, Tareas No Programadas y Gestión.")
-
-    if week_id_obj == "Semana Pasada":
-        st.markdown("---")
-        st.markdown("#### 📥 Presentaciones Individuales para Reunión")
-        st.info("Genera un archivo PPTX por cada ajustador (7 diapositivas) con sus KPIs, casos, tareas no realizadas y casos sin movimiento. Se descarga un ZIP con todos los archivos.")
-        if st.button("🎯 Generar PPTX por Ajustador (ZIP)", type="primary", use_container_width=True, key=f"btn_pptx_{target_week_id}"):
-            with st.spinner("Generando presentaciones... esto puede tomar unos segundos."):
-                try:
-                    zip_bytes = generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj)
-                    st.download_button(
-                        label="⬇️ Descargar ZIP con PPTX por Ajustador",
-                        data=zip_bytes,
-                        file_name=f"Reportes_Ajustadores_{target_week_id}.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key=f"dl_pptx_{target_week_id}"
-                    )
-                    st.success(f"✅ {len(ajustadores_validos)} presentaciones generadas correctamente.")
-                except Exception as e:
-                    st.error(f"Error al generar PPTX: {e}")
-        st.markdown("---")
 
     op_doc = Document()
     agregar_logo_word(op_doc)
@@ -2387,17 +2396,40 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
             op_doc.add_paragraph("")
         st.markdown("---")
 
-    # --- BOTONES DE DESCARGA OPERACIONAL ---
-    st.markdown("### Exportar Reporte Operacional")
+    # --- CENTRO DE DESCARGAS ---
+    st.markdown("---")
+    st.subheader("📥 Centro de Descargas")
+    grupo_descargas("📋 Reporte Operacional", "#10AA9E")
     word_op_buffer = io.BytesIO()
     op_doc.save(word_op_buffer)
+    fila_descarga("WORD", C_BADGE_WORD, "Reporte Operacional Detallado",
+                  "Embudo, cumplimiento, tareas no programadas y gestión, consolidado para el equipo.")
     st.download_button(
-        label="📥 DESCARGAR REPORTE OPERACIONAL (WORD)", 
-        data=word_op_buffer.getvalue(), 
-        file_name=f"Reporte_Operacional_{target_week_id}.docx", 
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", 
+        label="⬇️ Descargar Reporte Operacional (Word)",
+        data=word_op_buffer.getvalue(),
+        file_name=f"Reporte_Operacional_{target_week_id}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         type="primary"
     )
+
+    if week_id_obj == "Semana Pasada":
+        fila_descarga("PPTX·ZIP", C_BADGE_ZIP, "Presentaciones Individuales para Reunión",
+                      "Un PPTX por cada ajustador (7 diapositivas) con sus KPIs, casos, tareas no realizadas y casos sin movimiento, empaquetados en un ZIP.")
+        if st.button("📥 Generar", type="primary", use_container_width=True, key=f"btn_pptx_{target_week_id}"):
+            with st.spinner("Generando presentaciones... esto puede tomar unos segundos."):
+                try:
+                    zip_bytes = generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj)
+                    st.download_button(
+                        label="⬇️ Descargar ZIP con PPTX por Ajustador",
+                        data=zip_bytes,
+                        file_name=f"Reportes_Ajustadores_{target_week_id}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"dl_pptx_{target_week_id}"
+                    )
+                    st.success(f"✅ {len(ajustadores_validos)} presentaciones generadas correctamente.")
+                except Exception as e:
+                    st.error(f"Error al generar PPTX: {e}")
 
 
 # ---------------------------------------------------------
@@ -2902,26 +2934,32 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         doc.save(word_buffer)
 
         st.markdown("---")
-        st.markdown("### Opciones de Exportación Gantt Corporativa")
-        col1, col2, col3 = st.columns(3)
-        with col1: 
-            st.download_button(
-                label="📥 DESCARGAR GANTT (EXCEL)", 
-                data=excel_buffer.getvalue(), 
-                file_name=f"Gantt_Planificacion_{target_week_id}.xlsx"
-            )
-        with col2: 
-            st.download_button(
-                label="📥 DESCARGAR REPORTE (WORD)", 
-                data=word_buffer.getvalue(), 
-                file_name=f"Reporte_Planificacion_{target_week_id}.docx"
-            )
-        with col3: 
-            st.download_button(
-                label="📥 DESCARGAR DATA BRUTA (CSV)", 
-                data=df_raw.to_csv(index=False).encode('utf-8-sig'), 
-                file_name=f"Data_Bruta_{target_week_id}.csv"
-            )
+        st.subheader("📥 Centro de Descargas")
+        grupo_descargas("📊 Carta Gantt Operativa", "#10AA9E")
+        fila_descarga("EXCEL", C_BADGE_EXCEL, "Gantt de Planificación",
+                      "Planificación de la semana en formato Gantt por caso y ajustador.")
+        st.download_button(
+            label="⬇️ Descargar Gantt (Excel)",
+            data=excel_buffer.getvalue(),
+            file_name=f"Gantt_Planificacion_{target_week_id}.xlsx",
+            type="primary"
+        )
+        fila_descarga("WORD", C_BADGE_WORD, "Reporte de Planificación",
+                      "Versión imprimible de la planificación de la semana.")
+        st.download_button(
+            label="⬇️ Descargar Reporte (Word)",
+            data=word_buffer.getvalue(),
+            file_name=f"Reporte_Planificacion_{target_week_id}.docx",
+            type="primary"
+        )
+        fila_descarga("CSV", C_BADGE_CSV, "Data Bruta",
+                      "Exportación sin procesar de todas las acciones planificadas de la semana.")
+        st.download_button(
+            label="⬇️ Descargar Data Bruta (CSV)",
+            data=df_raw.to_csv(index=False).encode('utf-8-sig'),
+            file_name=f"Data_Bruta_{target_week_id}.csv",
+            type="primary"
+        )
     else:
         st.info("No hay tareas operativas (casos) planificadas aún para esta semana.")
 
@@ -5759,26 +5797,6 @@ def vista_reportes():
 
     st.title("📊 Tablero de Control y Planificación")
 
-    # --- Helpers del "Centro de Descargas": tarjetas de reporte agrupadas por tema ---
-    C_BADGE_WORD = ('#2B579A', '#EAF1FB')
-    C_BADGE_PPTX = ('#C0401B', '#FDEEE8')
-
-    def _grupo_descargas(titulo, color_borde):
-        st.markdown(f'<div class="marco-gestion" style="border-left-color:{color_borde}; margin-top:18px;"><h4 style="margin:0;">{titulo}</h4></div>', unsafe_allow_html=True)
-
-    def _fila_descarga(badge_texto, badge_colores, titulo, descripcion):
-        color_fg, color_bg = badge_colores
-        col_b, col_i = st.columns([1, 7])
-        with col_b:
-            st.markdown(
-                f'<div style="margin-top:6px; text-align:center; background:{color_bg}; color:{color_fg}; '
-                f'font-size:10px; font-weight:700; letter-spacing:.03em; padding:4px 6px; border-radius:12px;">{badge_texto}</div>',
-                unsafe_allow_html=True
-            )
-        with col_i:
-            st.markdown(f"**{titulo}**")
-            st.caption(descripcion)
-
     tab_semanal, tab_mensual = st.tabs(["📅 Reportes Semanales", "🗓️ Reportes Mensuales"])
 
     with tab_semanal:
@@ -5835,12 +5853,12 @@ def vista_reportes():
         st.subheader("📥 Centro de Descargas")
 
         if week_id_obj in ("Semana Actual", "Semana Pasada"):
-            _grupo_descargas("📦 Entregables", "#10AA9E")
+            grupo_descargas("📦 Entregables", "#10AA9E")
             if week_id_obj == "Semana Pasada":
-                _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
+                fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
                                 "Informes Finales, Intermedios y Preliminares comprometidos esta semana, separados por estado de cumplimiento.")
             else:
-                _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
+                fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
                                 "Informes Finales, Intermedios y Preliminares planificados para esta semana, separados por estado de cumplimiento a la fecha.")
             if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_entregables_semanal"):
                 try:
@@ -5856,7 +5874,7 @@ def vista_reportes():
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
-            _fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
+            fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
                             "Casos vigentes sin Informe Preliminar completado, con fecha de inspección (agendada o realizada).")
             if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_preliminares_semanal"):
                 try:
@@ -5872,8 +5890,8 @@ def vista_reportes():
                 except Exception as e:
                     st.error(f"Error al generar el reporte: {e}")
 
-        _grupo_descargas("🔴 Seguimiento de Casos", "#D9534F")
-        _fila_descarga("WORD", C_BADGE_WORD, "Casos Sin Movimiento (> 21 días)",
+        grupo_descargas("🔴 Seguimiento de Casos", "#D9534F")
+        fila_descarga("WORD", C_BADGE_WORD, "Casos Sin Movimiento (> 21 días)",
                         "Casos vigentes que no registran actividad en la Base Maestra ni en el histórico de planificación en los últimos 21 días. Ordenados por Ajustador.")
         if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_sin_mov"):
             with st.spinner("Analizando casos..."):
@@ -5934,13 +5952,13 @@ def vista_reportes():
         # --- CENTRO DE DESCARGAS: reportes del mes agrupados por tema ---
         st.markdown("---")
         st.subheader("📥 Centro de Descargas")
-        _grupo_descargas("📦 Entregables", "#10AA9E")
+        grupo_descargas("📦 Entregables", "#10AA9E")
 
         if mes_opcion == "Mes Pasado":
-            _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
+            fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Ejecutados",
                             "Informes Finales, Intermedios y Preliminares comprometidos durante el mes, separados por estado de cumplimiento.")
         else:
-            _fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
+            fila_descarga("WORD", C_BADGE_WORD, "Reporte de Entregables Planificados",
                             "Informes Finales, Intermedios y Preliminares planificados para este mes, separados por estado de cumplimiento a la fecha.")
         if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_entregables_mensual"):
             try:
@@ -5956,7 +5974,7 @@ def vista_reportes():
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
 
-        _fila_descarga("PPTX", C_BADGE_PPTX, "Reporte Ejecutivo del Mes",
+        fila_descarga("PPTX", C_BADGE_PPTX, "Reporte Ejecutivo del Mes",
                         "Grandes resúmenes (Entregables, por Área, Distribución de Estado, Casos Nuevos y Cobertura) + todo el detalle como respaldo al final.")
         if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_ejecutivo_mensual"):
             try:
@@ -5972,7 +5990,7 @@ def vista_reportes():
             except Exception as e:
                 st.error(f"Error al generar el reporte: {e}")
 
-        _fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
+        fila_descarga("WORD", C_BADGE_WORD, "Preliminares Pendientes",
                         "Casos vigentes sin Informe Preliminar completado, con fecha de inspección (agendada o realizada).")
         if st.button("📥 Generar", type="primary", use_container_width=True, key="btn_gen_preliminares_mensual"):
             try:
