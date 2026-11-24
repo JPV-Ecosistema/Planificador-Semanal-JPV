@@ -243,11 +243,17 @@ def render_sidebar_base_maestra():
                                 ws = doc.worksheet("Base_Maestra")
                             except Exception:
                                 ws = doc.add_worksheet(title="Base_Maestra", rows="100", cols="100")
-                            ws.clear()
                             matriz = [["FECHA_ACTUALIZACION", fecha_hoy]]
                             matriz.append(df_nuevo.columns.astype(str).tolist())
                             matriz.extend(df_nuevo.values.tolist())
+                            # Escribe primero la data nueva (nunca deja la pestaña vacía si esto
+                            # falla) y solo después recorta filas sobrantes de una carga anterior
+                            # más larga; si el resize falla, a lo más quedan filas viejas de más.
                             ws.update("A1", matriz)
+                            try:
+                                ws.resize(rows=len(matriz))
+                            except Exception:
+                                pass
                         st.success("¡Base Maestra procesada y asegurada en la nube corporativa!")
                     except Exception as cloud_error:
                         if "429" in str(cloud_error):
@@ -315,19 +321,34 @@ def get_month_identifier(offset_months=0):
     return f"{year}_{month:02d}"
 
 def sync_from_cloud(filename, filepath):
+    """Intenta restaurar filename desde Google Sheets. Devuelve la lista/datos si lo
+    encuentra, [] si la hoja no tiene ese archivo (no existe) o no hay nube configurada,
+    o None si hubo un error leyendo la nube -- en ese caso NO hay que asumir que el plan
+    está vacío."""
     sheet = get_google_sheet()
-    if sheet:
-        try:
-            registros = con_reintento(lambda: sheet.get_all_records())
-            for fila in registros:
-                if str(fila.get('Archivo', '')) == filename:
-                    datos_json = json.loads(fila.get('JSON_Data', '[]'))
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(datos_json, f, ensure_ascii=False, indent=4)
-                    return datos_json
-        except Exception as e:
-            pass
+    if not sheet:
+        return []
+    try:
+        registros = con_reintento(lambda: sheet.get_all_records())
+    except Exception:
+        return None
+    for fila in registros:
+        if str(fila.get('Archivo', '')) == filename:
+            datos_json = json.loads(fila.get('JSON_Data', '[]'))
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(datos_json, f, ensure_ascii=False, indent=4)
+            return datos_json
     return []
+
+def _marcar_carga_incierta(filepath, incierta):
+    """Registra si la última carga de filepath pudo o no verificarse contra la nube.
+    save_plan_actualizado usa esto para bloquear un guardado que sobrescribiría datos
+    que nunca llegamos a confirmar que no existían."""
+    clave = f"_carga_incierta::{filepath}"
+    if incierta:
+        st.session_state[clave] = True
+    else:
+        st.session_state.pop(clave, None)
 
 def load_plan_semanal(ajustador, offset_weeks=0):
     week_id = get_week_identifier(offset_weeks)
@@ -336,9 +357,15 @@ def load_plan_semanal(ajustador, offset_weeks=0):
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
+            _marcar_carga_incierta(filepath, False)
             return json.load(f), filepath
     else:
         data = sync_from_cloud(filename, filepath)
+        if data is None:
+            _marcar_carga_incierta(filepath, True)
+            st.warning("⚠️ No se pudo verificar en la nube si ya existía un plan guardado para esta semana. Por seguridad no se podrá guardar hasta recargar la página con conexión estable.")
+            return [], filepath
+        _marcar_carga_incierta(filepath, False)
         return data, filepath
 
 def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
@@ -348,9 +375,15 @@ def load_plan_mensual(ajustador, offset_months=0, explicit_month_id=None):
     filepath = os.path.join(PERSISTENCE_DIR, filename)
     if os.path.exists(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
+            _marcar_carga_incierta(filepath, False)
             return json.load(f), filepath
     else:
         data = sync_from_cloud(filename, filepath)
+        if data is None:
+            _marcar_carga_incierta(filepath, True)
+            st.warning("⚠️ No se pudo verificar en la nube si ya existía un plan mensual guardado. Por seguridad no se podrá guardar hasta recargar la página con conexión estable.")
+            return [], filepath
+        _marcar_carga_incierta(filepath, False)
         return data, filepath
 
 def load_plan_mensual_local(ajustador, offset_months=0, explicit_month_id=None):
@@ -367,38 +400,50 @@ def load_plan_mensual_local(ajustador, offset_months=0, explicit_month_id=None):
     return []
 
 def save_plan_actualizado(filepath, data):
+    """Guarda localmente (siempre) e intenta sincronizar con Google Sheets.
+    Devuelve True si el guardado en la nube fue exitoso o no aplica (sin conexión
+    configurada), False si falló. Quien llama debe usar este valor para NO mostrar
+    éxito ni hacer st.rerun() cuando es False, así el error queda visible en pantalla."""
+    if st.session_state.get(f"_carga_incierta::{filepath}"):
+        st.error("❌ No se puede guardar: la última carga de este archivo no se pudo verificar contra la nube (posible falla de conexión), así que guardar ahora podría borrar datos que no llegamos a ver. Recarga la página con conexión estable e intenta de nuevo.")
+        return False
+
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-        
-    sheet = get_google_sheet()
-    if sheet:
-        try:
-            filename = os.path.basename(filepath)
-            json_str = json.dumps(data, ensure_ascii=False)
-            fecha_upd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            try:
-                headers = sheet.row_values(1)
-            except:
-                headers = []
-                
-            if not headers or 'Archivo' not in headers:
-                sheet.clear()
-                sheet.append_row(['Archivo', 'JSON_Data', 'Ultima_Actualizacion'])
-                sheet.append_row([filename, json_str, fecha_upd])
-                return
 
-            col_archivo_idx = headers.index('Archivo') + 1
-            archivos_en_nube = sheet.col_values(col_archivo_idx)
-            
-            if filename in archivos_en_nube:
-                fila_idx = archivos_en_nube.index(filename) + 1
-                rango = f'A{fila_idx}:C{fila_idx}'
-                sheet.update(rango, [[filename, json_str, fecha_upd]])
-            else:
-                sheet.append_row([filename, json_str, fecha_upd])
-        except Exception as e:
-            st.error(f"❌ Error al escribir filas en Google Sheets: {e}")
+    sheet = get_google_sheet()
+    if not sheet:
+        return True
+
+    try:
+        filename = os.path.basename(filepath)
+        json_str = json.dumps(data, ensure_ascii=False)
+        fecha_upd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        headers = con_reintento(lambda: sheet.row_values(1))
+
+        if not headers:
+            sheet.append_row(['Archivo', 'JSON_Data', 'Ultima_Actualizacion'])
+            sheet.append_row([filename, json_str, fecha_upd])
+            return True
+
+        if 'Archivo' not in headers:
+            st.error("❌ No se pudo guardar en la nube: la hoja tiene datos pero no tiene la columna 'Archivo' esperada. Revísala manualmente (no se borró nada).")
+            return False
+
+        col_archivo_idx = headers.index('Archivo') + 1
+        archivos_en_nube = sheet.col_values(col_archivo_idx)
+
+        if filename in archivos_en_nube:
+            fila_idx = archivos_en_nube.index(filename) + 1
+            rango = f'A{fila_idx}:C{fila_idx}'
+            sheet.update(rango, [[filename, json_str, fecha_upd]])
+        else:
+            sheet.append_row([filename, json_str, fecha_upd])
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al escribir en Google Sheets: {e}")
+        return False
 
 def propagar_estado_a_hito_mensual(ajustador, id_mcl_origen, mes_hint, nuevo_estado_cumplimiento, nueva_fecha_ejecucion):
     """Si una tarea del Plan Semanal proviene de un hito del Plan Mensual (id_mcl_origen),
@@ -471,7 +516,7 @@ def load_observaciones_sin_preliminar():
 def save_observaciones_sin_preliminar(datos):
     filename = "observaciones_sin_preliminar.json"
     filepath = os.path.join(PERSISTENCE_DIR, filename)
-    save_plan_actualizado(filepath, datos)
+    return save_plan_actualizado(filepath, datos)
 
 # ---------------------------------------------------------
 # BLOQUE 2: VISTA - PLANIFICADOR (SEMANAL Y MENSUAL MCL)
@@ -683,38 +728,42 @@ def vista_planificador(modo="Semanal"):
                                                 if 'estado_cumplimiento' in row and pd.notna(row.get('estado_cumplimiento')):
                                                     task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
                                                 plan_modificado.append(task)
-                                        save_plan_actualizado(path_boveda, plan_modificado)
-                                        if modo == "Semanal":
-                                            # Si alguna de estas tareas proviene de un hito del Plan Mensual,
-                                            # refleja aquí su cumplimiento también en el hito de origen.
-                                            for _t in plan_modificado:
-                                                if _t.get('id_mcl_origen'):
-                                                    propagar_estado_a_hito_mensual(
-                                                        ajustador_seleccionado,
-                                                        _t.get('id_mcl_origen'),
-                                                        _t.get('id_mcl_origen_mes', ''),
-                                                        _t.get('estado_cumplimiento', 'Pendiente'),
-                                                        _t.get('fecha_ejecucion', ''),
-                                                    )
-                                        st.session_state[f"_plan_ok_{modo}"] = f"✅ Plan actualizado: {len(plan_modificado)} acción(es) guardadas."
-                                        _form_prefixes = (
-                                            'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
-                                            'cat_', 'sub_', 'man_', 'fecha_',
-                                            'num_comercial', 'txt_com_', 'fec_com_',
-                                            'num_admin', 'txt_adm_', 'fec_adm_',
-                                            'mcl_chk_', 'mcl_fec_',
-                                        )
-                                        for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
-                                            del st.session_state[_k]
-                                        st.rerun()
+                                        if save_plan_actualizado(path_boveda, plan_modificado):
+                                            if modo == "Semanal":
+                                                # Si alguna de estas tareas proviene de un hito del Plan Mensual,
+                                                # refleja aquí su cumplimiento también en el hito de origen.
+                                                for _t in plan_modificado:
+                                                    if _t.get('id_mcl_origen'):
+                                                        propagar_estado_a_hito_mensual(
+                                                            ajustador_seleccionado,
+                                                            _t.get('id_mcl_origen'),
+                                                            _t.get('id_mcl_origen_mes', ''),
+                                                            _t.get('estado_cumplimiento', 'Pendiente'),
+                                                            _t.get('fecha_ejecucion', ''),
+                                                        )
+                                            st.session_state[f"_plan_ok_{modo}"] = f"✅ Plan actualizado: {len(plan_modificado)} acción(es) guardadas."
+                                            _form_prefixes = (
+                                                'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
+                                                'cat_', 'sub_', 'man_', 'fecha_',
+                                                'num_comercial', 'txt_com_', 'fec_com_',
+                                                'num_admin', 'txt_adm_', 'fec_adm_',
+                                                'mcl_chk_', 'mcl_fec_',
+                                            )
+                                            for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
+                                                del st.session_state[_k]
+                                            st.rerun()
+                                        else:
+                                            st.error("No se guardaron los cambios: falló el guardado en la nube (ver mensaje de error arriba). Tus ediciones siguen en la tabla, puedes intentar guardar de nuevo.")
                                     except Exception as edit_err:
                                         st.error(f"Error al guardar cambios: {edit_err}")
                             with col_res:
                                 if st.button("🗑️ Anular Plan Completo", key="btn_pánico_reset", use_container_width=True):
                                     try:
-                                        save_plan_actualizado(path_boveda, [])
-                                        st.success("¡Plan anulado! La pizarra está limpia.")
-                                        st.rerun()
+                                        if save_plan_actualizado(path_boveda, []):
+                                            st.success("¡Plan anulado! La pizarra está limpia.")
+                                            st.rerun()
+                                        else:
+                                            st.error("No se pudo confirmar el reseteo en la nube (ver mensaje de error arriba). Intenta de nuevo.")
                                     except Exception as reset_err:
                                         st.error(f"Error al resetear: {reset_err}")
                 else:
@@ -732,9 +781,11 @@ def vista_planificador(modo="Semanal"):
                         st.markdown("Si cometiste un error crítico, puedes vaciar el plan actual completo para volver a formularlo.")
                         if st.button("🗑️ ANULAR PLAN ACTUAL Y EMPEZAR DE CERO", key="btn_pánico_reset"):
                             try:
-                                save_plan_actualizado(path_boveda, [])
-                                st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
-                                st.rerun()
+                                if save_plan_actualizado(path_boveda, []):
+                                    st.success("¡Planificación anulada exitosamente! La pizarra está limpia.")
+                                    st.rerun()
+                                else:
+                                    st.error("No se pudo confirmar el reseteo en la nube (ver mensaje de error arriba). Intenta de nuevo.")
                             except Exception as reset_err:
                                 st.error(f"Error al ejecutar el reseteo: {reset_err}")
 
@@ -1049,8 +1100,9 @@ def vista_planificador(modo="Semanal"):
                         n = len(plan_transaccional)
                         if modo == "Mensual":
                             plan_existente, filepath = load_plan_mensual(ajustador_seleccionado, offset_months=offset_months)
-                            save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.session_state['_plan_ok_Mensual'] = f"✅ Plan Mensual ({mes_opcion}): {n} registro(s) agregados exitosamente."
+                            guardado_ok = save_plan_actualizado(filepath, plan_existente + plan_transaccional)
+                            if guardado_ok:
+                                st.session_state['_plan_ok_Mensual'] = f"✅ Plan Mensual ({mes_opcion}): {n} registro(s) agregados exitosamente."
                         else:
                             plan_existente, filepath = load_plan_semanal(ajustador_seleccionado, offset_weeks=offset_weeks)
 
@@ -1065,22 +1117,26 @@ def vista_planificador(modo="Semanal"):
                                     if mcl_modificado:
                                         save_plan_actualizado(_path_mes, _data_mes)
 
-                            save_plan_actualizado(filepath, plan_existente + plan_transaccional)
-                            st.session_state['_plan_ok_Semanal'] = f"✅ Plan Semanal ({semana_opcion}): {n} registro(s) guardados correctamente."
+                            guardado_ok = save_plan_actualizado(filepath, plan_existente + plan_transaccional)
+                            if guardado_ok:
+                                st.session_state['_plan_ok_Semanal'] = f"✅ Plan Semanal ({semana_opcion}): {n} registro(s) guardados correctamente."
 
-                        # Limpiar estado del formulario para evitar re-envío accidental tras el rerun.
-                        # Streamlit preserva los valores de los widgets en session_state; si no se borran,
-                        # plan_transaccional se reconstruye con las mismas tareas y el botón reaparece.
-                        _form_prefixes = (
-                            'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
-                            'cat_', 'sub_', 'man_', 'fecha_',
-                            'num_comercial', 'txt_com_', 'fec_com_',
-                            'num_admin', 'txt_adm_', 'fec_adm_',
-                            'mcl_chk_', 'mcl_fec_',
-                        )
-                        for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
-                            del st.session_state[_k]
-                        st.rerun()
+                        if not guardado_ok:
+                            st.error("No se guardaron los registros: falló el guardado en la nube (ver mensaje de error arriba). Tus datos siguen en el formulario, intenta guardar de nuevo.")
+                        else:
+                            # Limpiar estado del formulario para evitar re-envío accidental tras el rerun.
+                            # Streamlit preserva los valores de los widgets en session_state; si no se borran,
+                            # plan_transaccional se reconstruye con las mismas tareas y el botón reaparece.
+                            _form_prefixes = (
+                                'multiselect_casos_plan', 'est_proj_', 'sub_proj_', 'num_act_',
+                                'cat_', 'sub_', 'man_', 'fecha_',
+                                'num_comercial', 'txt_com_', 'fec_com_',
+                                'num_admin', 'txt_adm_', 'fec_adm_',
+                                'mcl_chk_', 'mcl_fec_',
+                            )
+                            for _k in [k for k in list(st.session_state.keys()) if k.startswith(_form_prefixes)]:
+                                del st.session_state[_k]
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
             elif selected_indices or int(num_comercial) > 0 or int(num_admin) > 0:
@@ -1246,9 +1302,11 @@ def vista_diario():
             if st.button("💾 Guardar Actividades No Programadas"):
                 if len(nuevas_actividades) > 0:
                     plan_data.extend(nuevas_actividades)
-                    save_plan_actualizado(filepath, plan_data)
-                    st.session_state['_diario_ok'] = f"✅ {len(nuevas_actividades)} actividad(es) no programada(s) incorporadas al plan correctamente."
-                    st.rerun()
+                    if save_plan_actualizado(filepath, plan_data):
+                        st.session_state['_diario_ok'] = f"✅ {len(nuevas_actividades)} actividad(es) no programada(s) incorporadas al plan correctamente."
+                        st.rerun()
+                    else:
+                        st.error("No se guardó: falló el guardado en la nube (ver mensaje de error arriba). Intenta de nuevo.")
                 else:
                     st.warning("⚠️ Debe ingresar al menos el Número de Caso y la Acción Ejecutada en alguna de las filas para poder guardar.")
 
@@ -1377,22 +1435,24 @@ def vista_diario():
             if submit_button:
                 if cambios_realizados:
                     try:
-                        save_plan_actualizado(filepath, plan_data)
-                        # Si alguna tarea proviene de un hito del Plan Mensual, refleja aquí
-                        # su cumplimiento también en el hito de origen.
-                        for _t in plan_data:
-                            if _t.get('id_mcl_origen'):
-                                propagar_estado_a_hito_mensual(
-                                    ajustador_input,
-                                    _t.get('id_mcl_origen'),
-                                    _t.get('id_mcl_origen_mes', ''),
-                                    _t.get('estado_cumplimiento', 'Pendiente'),
-                                    _t.get('fecha_ejecucion', ''),
-                                )
-                        n_real = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
-                        n_tot  = len(plan_data)
-                        st.session_state['_diario_ok'] = f"✅ Cumplimiento actualizado: {n_real} de {n_tot} tarea(s) marcadas como realizadas."
-                        st.rerun()
+                        if save_plan_actualizado(filepath, plan_data):
+                            # Si alguna tarea proviene de un hito del Plan Mensual, refleja aquí
+                            # su cumplimiento también en el hito de origen.
+                            for _t in plan_data:
+                                if _t.get('id_mcl_origen'):
+                                    propagar_estado_a_hito_mensual(
+                                        ajustador_input,
+                                        _t.get('id_mcl_origen'),
+                                        _t.get('id_mcl_origen_mes', ''),
+                                        _t.get('estado_cumplimiento', 'Pendiente'),
+                                        _t.get('fecha_ejecucion', ''),
+                                    )
+                            n_real = sum(1 for t in plan_data if t.get("estado_cumplimiento") == "Realizado")
+                            n_tot  = len(plan_data)
+                            st.session_state['_diario_ok'] = f"✅ Cumplimiento actualizado: {n_real} de {n_tot} tarea(s) marcadas como realizadas."
+                            st.rerun()
+                        else:
+                            st.error("No se guardó: falló el guardado en la nube (ver mensaje de error arriba). Intenta de nuevo.")
                     except Exception as e:
                         st.error(f"Error al escribir en el disco/nube: {e}")
                 else:
@@ -1526,9 +1586,11 @@ def vista_admin():
                         except AttributeError:
                             task['fecha_ejecucion'] = str(row['fecha_ejecucion'])
                     plan_modificado.append(task)
-            save_plan_actualizado(filepath, plan_modificado)
-            st.success(f"✅ Plan actualizado: {len(plan_modificado)} tarea(s) guardadas.")
-            st.rerun()
+            if save_plan_actualizado(filepath, plan_modificado):
+                st.success(f"✅ Plan actualizado: {len(plan_modificado)} tarea(s) guardadas.")
+                st.rerun()
+            else:
+                st.error("No se guardó: falló el guardado en la nube (ver mensaje de error arriba). Intenta de nuevo.")
         except Exception as e:
             st.error(f"Error al guardar: {e}")
 
@@ -5850,9 +5912,11 @@ def renderizar_observaciones_sin_preliminar():
                 observaciones_guardadas[caso_obs] = {"observacion": texto_obs, "fecha_actualizacion": fecha_guardado_obs}
             elif caso_obs in observaciones_guardadas:
                 del observaciones_guardadas[caso_obs]
-        save_observaciones_sin_preliminar(observaciones_guardadas)
-        st.success("Observaciones guardadas.")
-        st.rerun()
+        if save_observaciones_sin_preliminar(observaciones_guardadas):
+            st.success("Observaciones guardadas.")
+            st.rerun()
+        else:
+            st.error("No se guardaron las observaciones: falló el guardado en la nube (ver mensaje de error arriba). Intenta de nuevo.")
 
 
 def vista_reportes():
