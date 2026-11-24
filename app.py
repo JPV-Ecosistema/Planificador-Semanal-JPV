@@ -29,11 +29,25 @@ PERSISTENCE_DIR = "persistence"
 def init_system():
     os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
+def ahora_chile():
+    """Hora actual en la zona horaria de los usuarios (America/Santiago), no la del
+    servidor (Streamlit Cloud corre en UTC). Usar siempre esta función -y no
+    datetime.now()- para cualquier fecha/hora que se compare contra "hoy" o se
+    muestre como "cuándo pasó esto"."""
+    import pytz
+    return datetime.now(pytz.timezone('America/Santiago'))
+
 def get_week_identifier(offset_weeks=0):
+    """Devuelve el ID de la semana (lunes a domingo) que contiene "hoy + offset_weeks".
+    Se ancla siempre al lunes de esa semana: calcularlo sobre la fecha del día exacto
+    partiría el ID a la mitad de semana en el cambio de año (ej. la semana del
+    28-dic-2026 al 03-ene-2027 daría 2026_W52 de lunes a jueves y 2027_W00 de viernes
+    a domingo)."""
     import pytz
     ahora_chile = datetime.now(pytz.timezone('America/Santiago'))
     target_date = ahora_chile + timedelta(weeks=offset_weeks)
-    return target_date.strftime("%Y_W%W")
+    lunes_target = target_date - timedelta(days=target_date.weekday())
+    return lunes_target.strftime("%Y_W%W")
 
 def apply_custom_styles():
     st.markdown("""
@@ -202,7 +216,7 @@ def render_sidebar_base_maestra():
     st.sidebar.header("📁 Base Maestra")
     necesita_actualizacion = True
     if fecha_actualizacion:
-        dias = (datetime.now() - fecha_actualizacion).days
+        dias = (ahora_chile().replace(tzinfo=None) - fecha_actualizacion).days
         if dias <= 7:
             st.sidebar.success(f"✅ Base actualizada hace {dias} días ({fecha_actualizacion.strftime('%d/%m/%Y')})")
             necesita_actualizacion = False
@@ -230,7 +244,7 @@ def render_sidebar_base_maestra():
                             lambda x: "" if str(x).strip().lower() in ["nan", "nat", "none", "<na>", "inf", "-inf"] else x
                         )
 
-                    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    fecha_hoy = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                     datos_guardar = {"fecha": fecha_hoy, "data": df_nuevo.to_dict(orient="records")}
                     with open(filepath, 'w', encoding='utf-8') as f:
                         json.dump(datos_guardar, f, ensure_ascii=False)
@@ -313,12 +327,8 @@ def calcular_tramo_mcl(fila):
 def get_month_identifier(offset_months=0):
     import pytz
     now = datetime.now(pytz.timezone('America/Santiago'))
-    year = now.year
-    month = now.month + offset_months
-    while month > 12:
-        month -= 12
-        year += 1
-    return f"{year}_{month:02d}"
+    year, month = divmod(now.year * 12 + (now.month - 1) + offset_months, 12)
+    return f"{year}_{month + 1:02d}"
 
 def sync_from_cloud(filename, filepath):
     """Intenta restaurar filename desde Google Sheets. Devuelve la lista/datos si lo
@@ -418,7 +428,7 @@ def save_plan_actualizado(filepath, data):
     try:
         filename = os.path.basename(filepath)
         json_str = json.dumps(data, ensure_ascii=False)
-        fecha_upd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_upd = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
 
         headers = con_reintento(lambda: sheet.row_values(1))
 
@@ -608,7 +618,10 @@ def vista_planificador(modo="Semanal"):
         # El candado evalúa la hora local y respeta la extensión si hubo festivo
         if not (viernes_prev <= hoy_dt <= dia_cierre_oficial):
             es_adicional = True
-            st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a {nombre_dia_cierre}) ha expirado (Hora local: {ahora_chile.strftime('%H:%M:%S')}). Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
+            if hoy_dt < viernes_prev:
+                st.warning(f"🔒 **Ventana de Planificación Aún No Abierta:** El plazo oficial para esta semana comienza el Viernes previo y se cierra el {nombre_dia_cierre}. Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'** hasta que se abra la ventana.")
+            else:
+                st.warning(f"🔒 **Ventana de Planificación Cerrada:** El plazo oficial (Viernes a {nombre_dia_cierre}) ha expirado (Hora local: {ahora_chile.strftime('%H:%M:%S')}). Toda tarea ingresada ahora quedará etiquetada como **'Actividad Adicional'**.")
 
     tipo_actividad_actual = "Actividad Adicional" if es_adicional else "Programada"
 
@@ -808,10 +821,14 @@ def vista_planificador(modo="Semanal"):
                 mcl_origen_mes_por_id = {t.get('id_transaccion'): _mid for _mid, (_data_mes, _) in mcl_fuentes.items() for t in _data_mes}
 
                 mcl_pendientes = []
+                domingo_target = viernes_target + timedelta(days=2)
                 for t in mcl_data:
                     try:
-                        fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d")
-                        if fec_obj.strftime("%Y_W%W") == target_week_id and not t.get("agendado_semana"):
+                        fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+                        # Se compara por rango de fechas (lunes..domingo de la semana objetivo)
+                        # en vez de comparar strings de ID de semana, para no depender de que
+                        # %Y_W%W no se parta en un cambio de año.
+                        if lunes_target <= fec_obj <= domingo_target and not t.get("agendado_semana"):
                             mcl_pendientes.append(t)
                     except: pass
                 
@@ -1277,7 +1294,7 @@ def vista_diario():
                         
                 with colNP2:
                     np_accion = st.text_input(f"Acción Ejecutada {i}:", key=f"np_acc_{i}")
-                    np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=datetime.now(), key=f"np_fec_{i}")
+                    np_fecha = st.date_input(f"Fecha de Ejecución {i}:", value=ahora_chile(), key=f"np_fec_{i}")
                 
                 if np_caso.strip() and np_accion.strip():
                     nuevas_actividades.append({
@@ -1294,8 +1311,8 @@ def vista_diario():
                         "accion": np_accion,
                         "fecha_compromiso": np_fecha.strftime("%Y-%m-%d"),
                         "estado_cumplimiento": "Realizado", 
-                        "fecha_ejecucion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "fecha_planificacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "fecha_ejecucion": ahora_chile().strftime("%Y-%m-%d %H:%M:%S"),
+                        "fecha_planificacion": ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                     })
                 st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
             
@@ -2860,7 +2877,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
         leyenda.add_run("Programado (Futuro)")
         leyenda.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        hoy = datetime.now().date()
+        hoy = ahora_chile().date()
         headers_word = ["Caso", "Nick Name", "Asegurado", "Acción/Entregable", "L", "M", "X", "J", "V", "Hon UF"]
 
         # --- ITERACIÓN POR DIVISIÓN Y POR AJUSTADOR ---
@@ -5949,7 +5966,7 @@ def vista_reportes():
         else:
             offset = 1
 
-        hoy = datetime.now()
+        hoy = ahora_chile()
         # Calculamos la fecha base del periodo seleccionado
         fecha_referencia = hoy + timedelta(weeks=offset)
         # Obtenemos el lunes de esa semana
