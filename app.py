@@ -37,6 +37,33 @@ def ahora_chile():
     import pytz
     return datetime.now(pytz.timezone('America/Santiago'))
 
+def _dict_sin_nan(d):
+    """Quita las claves cuyo valor es NaN/NaT. Al convertir una fila de un DataFrame
+    a dict con .to_dict(), pandas rellena con NaN cualquier columna que exista en
+    OTRAS filas del mismo plan pero no en esta (ej. 'agendado_semana' solo lo tienen
+    los hitos ya incorporados). Si eso se guarda tal cual, un .get('agendado_semana')
+    posterior ve NaN -que en Python es verdadero- en vez de "no tiene esa clave"."""
+    limpio = {}
+    for k, v in d.items():
+        try:
+            if pd.isna(v):
+                continue
+        except (TypeError, ValueError):
+            pass
+        limpio[k] = v
+    return limpio
+
+def _campo_valido(valor):
+    """Como bool(valor), pero NaN (float('nan')) cuenta como falso en vez de verdadero.
+    Usar para cualquier campo opcional (ej. agendado_semana, id_mcl_origen) que pueda
+    venir contaminado con NaN por el motivo explicado en _dict_sin_nan."""
+    try:
+        if pd.isna(valor):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(valor)
+
 def get_week_identifier(offset_weeks=0):
     """Devuelve el ID de la semana (lunes a domingo) que contiene "hoy + offset_weeks".
     Se ancla siempre al lunes de esa semana: calcularlo sobre la fecha del día exacto
@@ -654,7 +681,7 @@ def vista_planificador(modo="Semanal"):
             for _off in (0, -1):
                 _plan_mes = load_plan_mensual_local(ajustador_seleccionado, offset_months=_off)
                 for t in _plan_mes:
-                    if t.get('agendado_semana') or t.get('estado_cumplimiento') == 'Realizado':
+                    if _campo_valido(t.get('agendado_semana')) or t.get('estado_cumplimiento') == 'Realizado':
                         continue
                     try:
                         fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
@@ -725,22 +752,30 @@ def vista_planificador(modo="Semanal"):
                                 if st.button("💾 Guardar Cambios del Plan", key="btn_guardar_edicion", type="primary", use_container_width=True):
                                     try:
                                         plan_modificado = []
+                                        filas_nuevas_ignoradas = 0
                                         for orig_idx in edited_df.index:
                                             if orig_idx < len(df_ph_full):
-                                                task = df_ph_full.loc[orig_idx].to_dict()
+                                                task = _dict_sin_nan(df_ph_full.loc[orig_idx].to_dict())
                                                 row = edited_df.loc[orig_idx]
                                                 if 'accion' in row and pd.notna(row['accion']):
                                                     task['accion'] = str(row['accion'])
-                                                if 'fecha_compromiso' in row and row['fecha_compromiso'] is not None:
-                                                    try:
-                                                        task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
-                                                    except AttributeError:
-                                                        task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                                                if 'fecha_compromiso' in row:
+                                                    if pd.notna(row['fecha_compromiso']):
+                                                        try:
+                                                            task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
+                                                        except AttributeError:
+                                                            task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                                                    else:
+                                                        task['fecha_compromiso'] = ''
                                                 if 'tipo_actividad' in row and pd.notna(row.get('tipo_actividad')):
                                                     task['tipo_actividad'] = str(row['tipo_actividad'])
                                                 if 'estado_cumplimiento' in row and pd.notna(row.get('estado_cumplimiento')):
                                                     task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
                                                 plan_modificado.append(task)
+                                            else:
+                                                filas_nuevas_ignoradas += 1
+                                        if filas_nuevas_ignoradas:
+                                            st.warning(f"⚠️ {filas_nuevas_ignoradas} fila(s) nueva(s) agregada(s) directamente en la tabla NO se guardarán: esta tabla es solo para editar o eliminar tareas existentes. Usa el formulario de arriba para agregar tareas nuevas.")
                                         if save_plan_actualizado(path_boveda, plan_modificado):
                                             if modo == "Semanal":
                                                 # Si alguna de estas tareas proviene de un hito del Plan Mensual,
@@ -828,10 +863,16 @@ def vista_planificador(modo="Semanal"):
                         # Se compara por rango de fechas (lunes..domingo de la semana objetivo)
                         # en vez de comparar strings de ID de semana, para no depender de que
                         # %Y_W%W no se parta en un cambio de año.
-                        if lunes_target <= fec_obj <= domingo_target and not t.get("agendado_semana"):
+                        if lunes_target <= fec_obj <= domingo_target and not _campo_valido(t.get("agendado_semana")):
                             mcl_pendientes.append(t)
                     except: pass
-                
+
+                # Se reinicia en cada render (y no solo dentro del "if mcl_pendientes"
+                # de abajo) para que una selección hecha en otra semana/offset no quede
+                # pegada en session_state y termine marcando como "agendados" hitos que
+                # nunca se agregaron a ESTA semana.
+                st.session_state['mcl_ids_seleccionados'] = set()
+
                 if mcl_pendientes:
                     st.markdown("---")
                     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #d9534f;"><h4>📅 Compromisos del Plan Mensual disponibles esta semana</h4></div>', unsafe_allow_html=True)
@@ -1128,7 +1169,7 @@ def vista_planificador(modo="Semanal"):
                                 for _mid, (_data_mes, _path_mes) in mcl_fuentes.items():
                                     mcl_modificado = False
                                     for t in _data_mes:
-                                        if t.get('id_transaccion') in ids_a_marcar and not t.get('agendado_semana'):
+                                        if t.get('id_transaccion') in ids_a_marcar and not _campo_valido(t.get('agendado_semana')):
                                             t['agendado_semana'] = target_week_id
                                             mcl_modificado = True
                                     if mcl_modificado:
@@ -1582,27 +1623,38 @@ def vista_admin():
     if st.button("💾 Guardar Cambios (Administrador)", type="primary", key="btn_admin_guardar"):
         try:
             plan_modificado = []
+            filas_nuevas_ignoradas = 0
             for orig_idx in edited_df.index:
                 if orig_idx < len(df_full):
-                    task = df_full.loc[orig_idx].to_dict()
+                    task = _dict_sin_nan(df_full.loc[orig_idx].to_dict())
                     row = edited_df.loc[orig_idx]
                     if 'accion' in row and pd.notna(row['accion']):
                         task['accion'] = str(row['accion'])
-                    if 'fecha_compromiso' in row and row['fecha_compromiso'] is not None:
-                        try:
-                            task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
-                        except AttributeError:
-                            task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                    if 'fecha_compromiso' in row:
+                        if pd.notna(row['fecha_compromiso']):
+                            try:
+                                task['fecha_compromiso'] = row['fecha_compromiso'].strftime('%Y-%m-%d')
+                            except AttributeError:
+                                task['fecha_compromiso'] = str(row['fecha_compromiso'])
+                        else:
+                            task['fecha_compromiso'] = ''
                     if 'tipo_actividad' in row and pd.notna(row.get('tipo_actividad')):
                         task['tipo_actividad'] = str(row['tipo_actividad'])
                     if 'estado_cumplimiento' in row and pd.notna(row.get('estado_cumplimiento')):
                         task['estado_cumplimiento'] = str(row['estado_cumplimiento'])
-                    if 'fecha_ejecucion' in row and row['fecha_ejecucion'] is not None:
-                        try:
-                            task['fecha_ejecucion'] = row['fecha_ejecucion'].strftime('%Y-%m-%d 00:00:00')
-                        except AttributeError:
-                            task['fecha_ejecucion'] = str(row['fecha_ejecucion'])
+                    if 'fecha_ejecucion' in row:
+                        if pd.notna(row['fecha_ejecucion']):
+                            try:
+                                task['fecha_ejecucion'] = row['fecha_ejecucion'].strftime('%Y-%m-%d 00:00:00')
+                            except AttributeError:
+                                task['fecha_ejecucion'] = str(row['fecha_ejecucion'])
+                        else:
+                            task['fecha_ejecucion'] = ''
                     plan_modificado.append(task)
+                else:
+                    filas_nuevas_ignoradas += 1
+            if filas_nuevas_ignoradas:
+                st.warning(f"⚠️ {filas_nuevas_ignoradas} fila(s) nueva(s) agregada(s) directamente en la tabla NO se guardarán: esta tabla es solo para editar o eliminar tareas existentes.")
             if save_plan_actualizado(filepath, plan_modificado):
                 st.success(f"✅ Plan actualizado: {len(plan_modificado)} tarea(s) guardadas.")
                 st.rerun()
@@ -5475,7 +5527,7 @@ def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_o
         realizados = sum(1 for t in plan_mes if t.get('estado_cumplimiento') == 'Realizado')
         vencidos_sin_agendar = 0
         for t in plan_mes:
-            if t.get('estado_cumplimiento') == 'Realizado' or t.get('agendado_semana'):
+            if t.get('estado_cumplimiento') == 'Realizado' or _campo_valido(t.get('agendado_semana')):
                 continue
             try:
                 fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
