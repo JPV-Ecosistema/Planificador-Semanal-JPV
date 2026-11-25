@@ -37,6 +37,62 @@ def ahora_chile():
     import pytz
     return datetime.now(pytz.timezone('America/Santiago'))
 
+def parsear_fecha_flexible(val):
+    """Parsea una fecha de la Base Maestra (texto, serial de Excel o ya un valor
+    ausente) a un date de Python, o None si no se puede. Acepta dd-mm-aaaa con
+    dayfirst=True, PERO protege el formato ISO (aaaa-mm-dd, como guarda "Creado en"
+    y "Último movimiento"): sin esa protección, pd.to_datetime(dayfirst=True) invierte
+    día y mes incluso en fechas que empiezan con un año de 4 cifras (ej. "2026-11-05"
+    se lee como 11 de mayo en vez de 5 de noviembre)."""
+    try:
+        if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
+            return None
+        s = str(val).strip()
+        if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
+            serial = int(float(s))
+            if 30000 < serial < 60000:  # rango razonable de fechas Excel
+                return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
+        if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+            parsed = pd.to_datetime(s, errors='coerce')
+        else:
+            parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
+        return parsed.date() if pd.notna(parsed) else None
+    except Exception:
+        return None
+
+def calcular_caja_wip(df_realizados):
+    """Separa las tareas Realizadas entre 'Caja' (IFL / Carta de Cobertura Rechazo:
+    ingreso real) y 'WIP' (resto de categoría Operativa: trabajo en curso, sin
+    ingreso todavía), contando cada caso una sola vez en cada grupo. Si un caso ya
+    tiene una acción facturable, sus OTRAS acciones operativas realizadas no cuentan
+    de nuevo como WIP: antes la clasificación era por fila y no por caso, así que el
+    mismo honorario del caso se sumaba a la vez en Caja y en WIP."""
+    if df_realizados.empty:
+        vacio = df_realizados.iloc[0:0]
+        return vacio, vacio
+    cond_facturable = df_realizados['accion'].str.contains(
+        r'Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False
+    )
+    df_facturable = df_realizados[cond_facturable].drop_duplicates(subset=['Ajustador', 'numero_caso'])
+    claves_facturables = set(zip(df_facturable['Ajustador'], df_facturable['numero_caso']))
+    ya_facturable = pd.Series(
+        [k in claves_facturables for k in zip(df_realizados['Ajustador'], df_realizados['numero_caso'])],
+        index=df_realizados.index,
+    )
+    cond_wip = (df_realizados['categoria'] == 'Operativa') & (~cond_facturable) & (~ya_facturable)
+    df_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])
+    return df_facturable, df_wip
+
+def es_si(valor):
+    """Compara un valor de la Base Maestra contra "Sí" tolerando mayúsculas, tildes
+    y espacios (ej. 'Sí', 'SI', ' sí '). Un chequeo literal como "!= 'si'" trata "Sí"
+    -con tilde, como viene en los datos reales- como si fuera "No", marcando casos
+    con Preliminar como si no lo tuvieran."""
+    import unicodedata
+    s = str(valor).strip().lower()
+    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    return s in ('si', 's', 'yes', 'true', '1')
+
 def _dict_sin_nan(d):
     """Quita las claves cuyo valor es NaN/NaT. Al convertir una fila de un DataFrame
     a dict con .to_dict(), pandas rellena con NaN cualquier columna que exista en
@@ -1531,8 +1587,8 @@ def vista_diario():
             if st.button("🎯 Generar Mi PPTX", type="primary", use_container_width=True, key=f"btn_mi_pptx_{prev_week_id}"):
                 with st.spinner("Generando tu presentación..."):
                     try:
-                        df_week_prev, _, _ = sincronizar_y_cargar_datos(False, dias_prev)
-                        pptx_bytes = generar_pptx_individual(ajustador_input, df_week_prev, prev_week_id, "Semana Pasada")
+                        df_week_prev, df_raw_prev, _ = sincronizar_y_cargar_datos(False, dias_prev)
+                        pptx_bytes = generar_pptx_individual(ajustador_input, df_week_prev, df_raw_prev, prev_week_id, "Semana Pasada")
                         safe_name = ajustador_input.replace(' ', '_').replace('/', '-').replace(',', '')
                         st.download_button(
                             label="⬇️ Descargar mi PPTX",
@@ -1804,8 +1860,11 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
                 except Exception as e:
                     st.warning(f"Error al sincronizar con la nube: {e}")
                     
-    archivos_json = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json') and f != "BASE_MAESTRA.json"]
-    
+    archivos_json = [
+        f for f in os.listdir(PERSISTENCE_DIR)
+        if f.endswith('.json') and f not in ("BASE_MAESTRA.json", "observaciones_sin_preliminar.json")
+    ]
+
     df_maestro = load_master_base()
     diccionario_nicknames = {}
     ajustadores_validos = []
@@ -1828,9 +1887,10 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
 
     datos_consolidados = []
     for archivo in archivos_json:
+        es_mensual_mcl = archivo.startswith('plan_mensual_mcl_')
         partes_nombre = archivo.replace('plan_mensual_mcl_', '').replace('plan_', '').replace('.json', '').split('_20')
         nombre_ajustador = partes_nombre[0].replace('_', ' ')
-        
+
         filepath = os.path.join(PERSISTENCE_DIR, archivo)
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -1839,15 +1899,40 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
                     tarea['Ajustador'] = nombre_ajustador
                     numero_caso_str = str(tarea.get('numero_caso', ''))
                     tarea['Nick Name'] = diccionario_nicknames.get(numero_caso_str, '')
+                    tarea['_es_mensual_mcl'] = es_mensual_mcl
                     datos_consolidados.append(tarea)
         except Exception:
             pass
+
+    # Un hito del Plan Mensual incorporado a una semana queda DUPLICADO: existe como
+    # copia semanal (con id_mcl_origen apuntando al hito) y como original en el
+    # archivo mensual (solo marcado agendado_semana, pero sin borrarse de ahí). Sin
+    # este filtro, el original mensual se sigue contando en dashboard/operacional/
+    # PPTX/tendencia además de su copia semanal.
+    ids_incorporados = {
+        t.get('id_mcl_origen') for t in datos_consolidados
+        if not t.get('_es_mensual_mcl') and _campo_valido(t.get('id_mcl_origen'))
+    }
+    datos_consolidados = [
+        t for t in datos_consolidados
+        if not (t.pop('_es_mensual_mcl') and t.get('id_transaccion') in ids_incorporados)
+    ]
 
     df_week = pd.DataFrame()
     df_raw = pd.DataFrame()
     
     if datos_consolidados:
         df_raw = pd.DataFrame(datos_consolidados)
+        # Si una tarea no trae 'asegurado'/'Nick Name'/'numero_caso' (dict incompleto
+        # de origen, o columna que pandas rellenó con NaN al construir el DataFrame a
+        # partir de dicts con distintas claves), un groupby/pivot_table más adelante
+        # usa estas columnas como clave y con su comportamiento por defecto (dropna=
+        # True) descarta la fila entera en vez de agruparla. Se normaliza aquí, una
+        # sola vez, para que ningún reporte aguas abajo (Gantt, dashboard, operacional,
+        # PPTX) pierda casos reales por esto.
+        for _col in ('asegurado', 'Nick Name', 'numero_caso', 'accion'):
+            if _col in df_raw.columns:
+                df_raw[_col] = df_raw[_col].fillna('')
         df_raw['fecha_filtro'] = pd.to_datetime(df_raw['fecha_compromiso'], errors='coerce').dt.date
         df_week = df_raw[df_raw['fecha_filtro'].isin(dias_semana_target)].copy()
         
@@ -1886,13 +1971,10 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
     
     # --- 1. RESUMEN EJECUTIVO FINANCIERO ---
     st.markdown('<div class="marco-gestion" style="border-left: 5px solid #003366;"><h4>💰 Cuadrante 1: Valorización de Cartera y Facturación Proyectada</h4></div>', unsafe_allow_html=True)
-    cond_facturable = df_realizados['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
+    df_facturable, df_wip = calcular_caja_wip(df_realizados)
+    uf_facturables_caja = df_facturable['honorarios_estimados'].sum()
+    uf_traccionadas_wip = df_wip['honorarios_estimados'].sum()
 
-    uf_facturables_caja = df_realizados[cond_facturable].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
-
-    cond_wip = (df_realizados['categoria'] == 'Operativa') & (~cond_facturable)
-    uf_traccionadas_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
-    
     c_fin1, c_fin2 = st.columns(2)
     with c_fin1:
         st.metric("Ingreso Efectivo Facturable (Cierres/Rechazos)", f"{uf_facturables_caja:,.2f} UF", delta="Directo a Caja", delta_color="normal")
@@ -2288,7 +2370,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
 # BLOQUE 4.4: VISTA - REPORTE OPERACIONAL DE EQUIPO
 # VERSIÓN: 4.4.3 (Filtro Inteligente + ID Únicos para Gráficos)
 # ---------------------------------------------------------
-def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj):
+def renderizar_reporte_operacional(df_week, df_raw, ajustadores_validos, target_week_id, week_id_obj):
     import io
     import pandas as pd
     import streamlit as st
@@ -2333,11 +2415,9 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
         else:
             df_aj_realizado = df_aj[df_aj['estado_cumplimiento'] == 'Realizado']
 
-            cond_fac_aj = df_aj_realizado['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-            uf_caja_aj = df_aj_realizado[cond_fac_aj].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
-
-            cond_wip_aj = (df_aj_realizado['categoria'] == 'Operativa') & (~cond_fac_aj)
-            uf_wip_aj = df_aj_realizado[cond_wip_aj].drop_duplicates(subset=['Ajustador', 'numero_caso'])['honorarios_estimados'].sum()
+            df_fac_aj, df_wip_aj_d = calcular_caja_wip(df_aj_realizado)
+            uf_caja_aj = df_fac_aj['honorarios_estimados'].sum()
+            uf_wip_aj = df_wip_aj_d['honorarios_estimados'].sum()
 
             t_prog = len(df_aj[df_aj['tipo_actividad'] == 'Programada'])
             t_prog_hechas = len(df_aj_realizado[df_aj_realizado['tipo_actividad'] == 'Programada'])
@@ -2549,7 +2629,7 @@ def renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id,
         if st.button("📥 Generar", type="primary", use_container_width=True, key=f"btn_pptx_{target_week_id}"):
             with st.spinner("Generando presentaciones... esto puede tomar unos segundos."):
                 try:
-                    zip_bytes = generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj)
+                    zip_bytes = generar_zip_pptx_equipo(df_week, df_raw, ajustadores_validos, target_week_id, week_id_obj)
                     st.download_button(
                         label="⬇️ Descargar ZIP con PPTX por Ajustador",
                         data=zip_bytes,
@@ -3087,7 +3167,7 @@ def renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, 
                       "Exportación sin procesar de todas las acciones planificadas de la semana.")
         st.download_button(
             label="⬇️ Descargar Data Bruta (CSV)",
-            data=df_raw.to_csv(index=False).encode('utf-8-sig'),
+            data=df_week.to_csv(index=False).encode('utf-8-sig'),
             file_name=f"Data_Bruta_{target_week_id}.csv",
             type="primary"
         )
@@ -3204,7 +3284,8 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         ('Rechazo',            '6. Cartas de Cobertura (Rechazo)',                               '8B0000'),
         ('AnalisisPerdidas',   '7. Cartas de Análisis de Pérdidas',                              'B9770E'),
         ('Intermedio',         '8. Informes Intermedios',                                        '004A99'),
-        ('ImpugnacionAdendum', '9. Respuestas a Impugnación / Adendum',                           '996515'),
+        ('Preliminar',         '9. Informes Preliminares',                                       '4A5568'),
+        ('ImpugnacionAdendum', '10. Respuestas a Impugnación / Adendum',                          '996515'),
     ]
 
     # --- CUADRO RESUMEN (conteo + UF por clasificación): General y por Área ---
@@ -3587,7 +3668,16 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             df_vigentes[col_div_stock].apply(clasificar_area) if col_div_stock is not None else 'Otras / Sin Clasificar'
         )
 
+        col_caso_stock = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
+        casos_vigentes_cob = set(df_vigentes[col_caso_stock].astype(str).str.strip())
+
         df_tipo_planificado = df_informes[df_informes['tipo_informe'] == tipo_filtro_cob]
+        # El numerador debe ser un subconjunto del denominador (stock vigente): si un caso
+        # se planificó pero ya no está vigente (se cerró, o salió de la Base Maestra), no
+        # debe seguir contando aquí o la cobertura puede superar el 100%.
+        df_tipo_planificado = df_tipo_planificado[
+            df_tipo_planificado['numero_caso'].astype(str).str.strip().isin(casos_vigentes_cob)
+        ]
         df_tipo_planificado = (
             df_tipo_planificado.sort_values('estado_cumplimiento', ascending=False)
                                 .drop_duplicates(subset=['numero_caso'], keep='first')
@@ -3717,27 +3807,6 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
 
     # --- SECCIÓN: CASOS NUEVOS DE LA SEMANA (por Fecha de Creación en Base Maestra) ---
-    def parsear_fecha_creacion(val):
-        try:
-            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                return None
-            s = str(val).strip()
-            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                serial = int(float(s))
-                if 30000 < serial < 60000:  # rango razonable de fechas Excel
-                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            # La Base Maestra guarda "Creado en" como texto AAAA-MM-DD HH:MM:SS
-            # (sin ambigüedad): NO usar dayfirst aquí o mes y día quedan invertidos
-            # (ej. "2026-08-07" se leería como 7 de agosto pero con dayfirst=True
-            # se interpreta como 8 de julio).
-            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
-                parsed = pd.to_datetime(s, errors='coerce')
-            else:
-                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
-            return parsed.date() if pd.notna(parsed) else None
-        except Exception:
-            return None
-
     df_casos_nuevos = pd.DataFrame()
     df_sin_preliminar = pd.DataFrame()
     if not df_bm.empty:
@@ -3756,7 +3825,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
 
         if col_creado is not None:
             df_bm_n = df_bm.copy()
-            df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
+            df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_flexible)
             df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
 
             # Días desde asignación por caso, calculados respecto a hoy (no se usa el
@@ -3764,7 +3833,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             # entre la exportación del Excel y la generación de este reporte).
             if col_asignacion_n is not None:
                 hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
-                df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_creacion)
+                df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_flexible)
                 # zip() en vez de .iterrows(): con .iterrows() pandas arma una Series por
                 # fila mezclando todas las columnas, y si '_fecha_asignacion' viene None en
                 # alguna fila junto con columnas numéricas, ese None se vuelve NaN (float) y
@@ -3786,7 +3855,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             if col_estado_n is not None and col_preliminar_n is not None:
                 df_sin_preliminar = df_bm_n[
                     (df_bm_n[col_estado_n].astype(str).str.strip().str.lower() != 'cerrado') &
-                    (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
+                    (~df_bm_n[col_preliminar_n].apply(es_si))
                 ].copy()
 
     doc.add_page_break()
@@ -4013,23 +4082,6 @@ def generar_reporte_preliminares_pendientes_word():
         s = str(texto or '').strip()
         return s if len(s) <= max_len else s[:max_len - 1].rstrip() + '…'
 
-    def parsear_fecha_creacion(val):
-        try:
-            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                return None
-            s = str(val).strip()
-            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                serial = int(float(s))
-                if 30000 < serial < 60000:  # rango razonable de fechas Excel
-                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
-                parsed = pd.to_datetime(s, errors='coerce')
-            else:
-                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
-            return parsed.date() if pd.notna(parsed) else None
-        except Exception:
-            return None
-
     df_bm = pd.DataFrame()
     filepath_bm = os.path.join(PERSISTENCE_DIR, "BASE_MAESTRA.json")
     if os.path.exists(filepath_bm):
@@ -4088,31 +4140,31 @@ def generar_reporte_preliminares_pendientes_word():
         return buffer.getvalue()
 
     df_bm_n = df_bm.copy()
-    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion)
+    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_flexible)
     df_bm_n['_division'] = df_bm_n[col_div_n].apply(lambda x: str(x).strip() or 'Sin División Asignada')
 
     dict_dias_asignacion = {}
     if col_asignacion_n is not None:
-        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_creacion)
+        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion_n].apply(parsear_fecha_flexible)
         for _num, _fa in zip(df_bm_n[col_caso_n].astype(str).str.strip(), df_bm_n['_fecha_asignacion']):
             if _num and _fa is not None:
                 dict_dias_asignacion[_num] = (hoy - _fa).days
 
     df_sin_preliminar = df_bm_n[
         (df_bm_n[col_estado_n].astype(str).str.strip().str.lower() != 'cerrado') &
-        (df_bm_n[col_preliminar_n].astype(str).str.strip().str.lower() != 'si')
+        (~df_bm_n[col_preliminar_n].apply(es_si))
     ].copy()
 
     def resolver_inspeccion(row):
         completada = (
             col_insp_completada_n is not None and
-            str(row.get(col_insp_completada_n, '')).strip().lower() in ('si', 'sí')
+            es_si(row.get(col_insp_completada_n, ''))
         )
         if completada:
-            fecha = parsear_fecha_creacion(row.get(col_fecha_inspeccion_n)) if col_fecha_inspeccion_n else None
+            fecha = parsear_fecha_flexible(row.get(col_fecha_inspeccion_n)) if col_fecha_inspeccion_n else None
             texto = fecha.strftime('%d/%m/%Y') if fecha else 'Sin fecha'
             return texto, True
-        fecha_agendada = parsear_fecha_creacion(row.get(col_fecha_agendada_n)) if col_fecha_agendada_n else None
+        fecha_agendada = parsear_fecha_flexible(row.get(col_fecha_agendada_n)) if col_fecha_agendada_n else None
         if fecha_agendada:
             return fecha_agendada.strftime('%d/%m/%Y'), False
         return 'Sin agendar', False
@@ -4269,21 +4321,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
     df_vigentes = df_bm[df_bm[col_estado].astype(str).str.strip().str.lower() != 'cerrado'].copy()
 
     # --- Calcular días sin movimiento desde Base Maestra ---
-    def parsear_fecha_mov(val):
-        try:
-            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                return None
-            s = str(val).strip()
-            # Serial de fecha Excel (número entero almacenado como string)
-            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                serial = int(float(s))
-                if 30000 < serial < 60000:  # rango razonable de fechas Excel
-                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
-        except Exception:
-            return None
-
-    df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov].apply(parsear_fecha_mov)
+    df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov].apply(parsear_fecha_flexible)
     df_vigentes['_dias_sin_mov'] = df_vigentes['_fecha_mov'].apply(
         lambda f: (hoy - f).days if (f is not None and not pd.isnull(f)) else 9999
     )
@@ -4386,7 +4424,7 @@ def generar_reporte_sin_movimiento_word(df_raw):
 # ---------------------------------------------------------
 # BLOQUE 4.8: GENERADOR DE PPTX POR AJUSTADOR
 # ---------------------------------------------------------
-def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_id_obj):
+def generar_zip_pptx_equipo(df_week, df_raw, ajustadores_validos, target_week_id, week_id_obj):
     import io
     import os
     import json
@@ -4472,28 +4510,20 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
         col_aseg_bm   = 'Asegurado'         if 'Asegurado'                   in df_bm.columns else df_bm.columns[11]
         col_corr_bm   = 'Corredora'         if 'Corredora'                   in df_bm.columns else df_bm.columns[7]
 
-        def _parsear_fecha(val):
-            try:
-                if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                    return None
-                s = str(val).strip()
-                if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                    serial = int(float(s))
-                    if 30000 < serial < 60000:
-                        return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-                return pd.to_datetime(s, dayfirst=True, errors='coerce').date()
-            except Exception:
-                return None
-
         limite_21 = hoy - timedelta(days=21)
         df_vigentes = df_bm[df_bm[col_estado_bm].astype(str).str.strip().str.lower() != 'cerrado'].copy()
-        df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov_bm].apply(_parsear_fecha)
+        df_vigentes['_fecha_mov'] = df_vigentes[col_ultmov_bm].apply(parsear_fecha_flexible)
         df_vigentes['_dias_sin_mov'] = df_vigentes['_fecha_mov'].apply(
             lambda f: (hoy - f).days if (f is not None and not pd.isnull(f)) else 9999
         )
+        # Igual que en generar_reporte_sin_movimiento_word: se usa df_raw (histórico de
+        # TODAS las semanas), no solo df_week (la semana actual). Con df_week, un caso
+        # con actividad real hace 10 días pero sin ninguna tarea comprometida en ESTA
+        # semana aparecía igual como "sin movimiento" aquí, aunque en el Word -que sí
+        # mira el histórico completo- correctamente no apareciera.
         casos_act = set()
-        if not df_week.empty:
-            df_ej = df_week[df_week['estado_cumplimiento'] == 'Realizado'].copy()
+        if not df_raw.empty:
+            df_ej = df_raw[df_raw['estado_cumplimiento'] == 'Realizado'].copy()
             df_ej['_fej'] = pd.to_datetime(df_ej.get('fecha_ejecucion', pd.Series(dtype=str)), errors='coerce').dt.date
             casos_act = set(df_ej[df_ej['_fej'] >= limite_21]['numero_caso'].astype(str).str.strip().unique())
         df_sin_mov_global = df_vigentes[
@@ -4708,11 +4738,8 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
             sl = blank(prs)
             header(sl, '💰 Resultado Financiero de la Semana', C_NAVY)
             footer(sl, 2, TOTAL, meta)
-            cond_fac = df_aj_real['accion'].str.contains('Informe Final de Liquidación|Carta de Cobertura \\(Rechazo\\)', case=False, na=False) if not df_aj_real.empty else pd.Series(dtype=bool)
-            df_ifl_dedup = df_aj_real[cond_fac].drop_duplicates(subset=['Ajustador', 'numero_caso']) if not df_aj_real.empty else pd.DataFrame()
+            df_ifl_dedup, df_wip_dedup = calcular_caja_wip(df_aj_real)
             uf_caja  = df_ifl_dedup['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
-            cond_wip = ((df_aj_real['categoria'] == 'Operativa') & (~cond_fac)) if not df_aj_real.empty else pd.Series(dtype=bool)
-            df_wip_dedup = df_aj_real[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso']) if not df_aj_real.empty else pd.DataFrame()
             uf_wip   = df_wip_dedup['honorarios_estimados'].sum() if not df_aj_real.empty else 0.0
             n_ifl    = len(df_ifl_dedup) if not df_aj_real.empty else 0
 
@@ -4954,11 +4981,11 @@ def generar_zip_pptx_equipo(df_week, ajustadores_validos, target_week_id, week_i
     return zip_buf.getvalue()
 
 
-def generar_pptx_individual(ajustador, df_week, target_week_id, week_id_obj):
+def generar_pptx_individual(ajustador, df_week, df_raw, target_week_id, week_id_obj):
     """Genera el PPTX de un solo ajustador y devuelve los bytes del archivo."""
     import io
     import zipfile
-    zip_bytes = generar_zip_pptx_equipo(df_week, [ajustador], target_week_id, week_id_obj)
+    zip_bytes = generar_zip_pptx_equipo(df_week, df_raw, [ajustador], target_week_id, week_id_obj)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         return zf.read(zf.namelist()[0])
 
@@ -5391,8 +5418,12 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     casos_nuevos_tablas = [b for b in blocks if b.get('h1') == '1. Casos Nuevos del Mes' and b.get('table')]
     n_ing = next((len(b['table']['rows']) for b in casos_nuevos_tablas if 'Ingenier' in b['h2']), 0)
     n_em = next((len(b['table']['rows']) for b in casos_nuevos_tablas if 'Equipo' in b['h2']), 0)
+    # El TOTAL suma TODAS las tablas de "Casos Nuevos del Mes" (una por división real de
+    # la Base Maestra), no solo Ingeniería y Equipo Móvil: si alguna vez aparece una
+    # tercera división, antes quedaba fuera del total sin ningún aviso.
+    n_total_casos_nuevos = sum(len(b['table']['rows']) for b in casos_nuevos_tablas)
     txt(sl, 'CASOS NUEVOS DEL MES', 0.4, 0.72, 6.0, 0.3, size=12, bold=True, color=C_NAVY)
-    pill(sl, 'TOTAL', n_ing + n_em, 'casos nuevos', 0.4, 1.1, val_color=C_NAVY, w=2.6)
+    pill(sl, 'TOTAL', n_total_casos_nuevos, 'casos nuevos', 0.4, 1.1, val_color=C_NAVY, w=2.6)
     pill(sl, 'INGENIERÍA', n_ing, 'casos nuevos', 3.15, 1.1, val_color=C_NAVY, w=2.6)
     pill(sl, 'EQUIPO MÓVIL', n_em, 'casos nuevos', 5.9, 1.1, val_color=C_TEAL_DARK, w=2.6)
     txt(sl, 'COBERTURA DE PLANIFICACIÓN DEL MES (GENERAL)', 0.4, 2.85, 12.5, 0.3, size=12, bold=True, color=C_NAVY)
@@ -5610,6 +5641,7 @@ def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
         'Cartas de Cobertura (Rechazo)',
         'Cartas de Análisis de Pérdidas',
         'Informes Intermedios',
+        'Informes Preliminares',
         'Respuestas a Impugnación / Adendum',
     ]
 
@@ -5669,12 +5701,8 @@ def renderizar_reporte_mensual_facturacion(df_mes, mes_opcion):
         st.info("No se registran tareas Realizadas en este mes todavía.")
         return
 
-    cond_facturable = df_realizados['accion'].str.contains(r'Informe Final de Liquidación|Carta de Cobertura \(Rechazo\)', case=False, na=False)
-    df_facturable = df_realizados[cond_facturable].drop_duplicates(subset=['Ajustador', 'numero_caso'])
+    df_facturable, df_wip = calcular_caja_wip(df_realizados)
     uf_facturables_caja = df_facturable['honorarios_estimados'].sum()
-
-    cond_wip = (df_realizados['categoria'] == 'Operativa') & (~cond_facturable)
-    df_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])
     uf_traccionadas_wip = df_wip['honorarios_estimados'].sum()
 
     c1, c2 = st.columns(2)
@@ -5771,23 +5799,6 @@ def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
         st.warning("No hay Base Maestra cargada para calcular esta sección.")
         return
 
-    def parsear_fecha_creacion_mes(val):
-        try:
-            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                return None
-            s = str(val).strip()
-            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                serial = int(float(s))
-                if 30000 < serial < 60000:
-                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
-                parsed = pd.to_datetime(s, errors='coerce')
-            else:
-                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
-            return parsed.date() if pd.notna(parsed) else None
-        except Exception:
-            return None
-
     col_caso = 'Número de caso' if 'Número de caso' in df_bm.columns else df_bm.columns[0]
     col_div = 'División' if 'División' in df_bm.columns else df_bm.columns[3]
     col_nick = 'Nickname' if 'Nickname' in df_bm.columns else df_bm.columns[2]
@@ -5806,13 +5817,13 @@ def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
         return
 
     df_bm_n = df_bm.copy()
-    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_creacion_mes)
+    df_bm_n['_fecha_creacion'] = df_bm_n[col_creado].apply(parsear_fecha_flexible)
     df_bm_n['_division'] = df_bm_n[col_div].apply(lambda x: str(x).strip() or 'Sin División Asignada')
 
     dict_dias_asignacion = {}
     if col_asignacion is not None:
         hoy_ref = datetime.now(pytz.timezone('America/Santiago')).date()
-        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion].apply(parsear_fecha_creacion_mes)
+        df_bm_n['_fecha_asignacion'] = df_bm_n[col_asignacion].apply(parsear_fecha_flexible)
         # zip() en vez de .iterrows(): ver nota equivalente en generar_reporte_entregables_word.
         for num, fa in zip(df_bm_n[col_caso].astype(str).str.strip(), df_bm_n['_fecha_asignacion']):
             if num and fa is not None:
@@ -5829,7 +5840,7 @@ def renderizar_reporte_mensual_casos(dias_mes_target, mes_opcion):
     if col_estado is not None and col_preliminar is not None:
         df_sin_preliminar = df_bm_n[
             (df_bm_n[col_estado].astype(str).str.strip().str.lower() != 'cerrado') &
-            (df_bm_n[col_preliminar].astype(str).str.strip().str.lower() != 'si')
+            (~df_bm_n[col_preliminar].apply(es_si))
         ].copy()
 
     st.markdown(f"**Casos Nuevos del Mes ({mes_opcion}): {len(df_casos_nuevos)}**")
@@ -5899,23 +5910,6 @@ def renderizar_observaciones_sin_preliminar():
         st.warning("No hay Base Maestra cargada para calcular esta sección.")
         return
 
-    def _parsear_fecha_obs(val):
-        try:
-            if val is None or str(val).strip() in ('', 'nan', 'NaT', 'None'):
-                return None
-            s = str(val).strip()
-            if s.isdigit() or (s.replace('.', '', 1).isdigit() and '.' in s):
-                serial = int(float(s))
-                if 30000 < serial < 60000:
-                    return (pd.Timestamp('1899-12-30') + pd.Timedelta(days=serial)).date()
-            if len(s) >= 10 and s[4] == '-' and s[7] == '-':
-                parsed = pd.to_datetime(s, errors='coerce')
-            else:
-                parsed = pd.to_datetime(s, dayfirst=True, errors='coerce')
-            return parsed.date() if pd.notna(parsed) else None
-        except Exception:
-            return None
-
     col_caso_obs = 'Número de caso' if 'Número de caso' in df_bm_obs.columns else df_bm_obs.columns[0]
     col_nick_obs = 'Nickname' if 'Nickname' in df_bm_obs.columns else df_bm_obs.columns[2]
     col_div_obs = 'División' if 'División' in df_bm_obs.columns else df_bm_obs.columns[3]
@@ -5931,7 +5925,7 @@ def renderizar_observaciones_sin_preliminar():
 
     df_sp_obs = df_bm_obs[
         (df_bm_obs[col_estado_obs].astype(str).str.strip().str.lower() != 'cerrado') &
-        (df_bm_obs[col_preliminar_obs].astype(str).str.strip().str.lower() != 'si')
+        (~df_bm_obs[col_preliminar_obs].apply(es_si))
     ].copy()
 
     if df_sp_obs.empty:
@@ -5941,7 +5935,7 @@ def renderizar_observaciones_sin_preliminar():
     hoy_ref_obs = datetime.now(pytz.timezone('America/Santiago')).date()
     if col_asignacion_obs is not None:
         df_sp_obs['_dias_asignacion'] = df_sp_obs[col_asignacion_obs].apply(
-            lambda v: (hoy_ref_obs - _parsear_fecha_obs(v)).days if _parsear_fecha_obs(v) is not None else None
+            lambda v: (hoy_ref_obs - parsear_fecha_flexible(v)).days if parsear_fecha_flexible(v) is not None else None
         )
     else:
         df_sp_obs['_dias_asignacion'] = None
@@ -6039,7 +6033,7 @@ def vista_reportes():
         with tab_dashboard:
             renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj)
         with tab_operacional:
-            renderizar_reporte_operacional(df_week, ajustadores_validos, target_week_id, week_id_obj)
+            renderizar_reporte_operacional(df_week, df_raw, ajustadores_validos, target_week_id, week_id_obj)
         with tab_gantt:
             renderizar_carta_gantt(df_week, df_raw, dias_semana_target, target_week_id, week_id_obj)
 
