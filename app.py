@@ -3420,7 +3420,7 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
         for run in heading_resumen.runs:
             run.font.color.rgb = RGBColor(0, 51, 102)
             run.font.bold = True
-        table_resumen = doc.add_table(rows=2, cols=5)
+        table_resumen = doc.add_table(rows=2, cols=8)
         table_resumen.style = 'Table Grid'
 
         def _estilizar_header(cell, texto):
@@ -3434,14 +3434,22 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             cell._tc.get_or_add_tcPr().append(shading_elm)
 
         # Encabezado combinado: "Clasificación" ocupa ambas filas; "Planificado" y
-        # "Realizado" son título de columna, con "Cantidad"/"Hon (UF)" como subcolumna.
+        # "Realizado" son título de columna, con sus subcolumnas debajo. Dentro de
+        # "Realizado" también se desglosa cuánto vino del Plan Mensual del ajustador
+        # ("Dentro Plan") y cuánto no ("Fuera Plan", con su detalle MCL), usando el
+        # mismo campo id_mcl_origen que ya usa calcular_conciliacion_mensual: así
+        # Dentro Plan + Fuera Plan siempre suma exactamente el Hon (UF) Realizado de
+        # la fila, sin introducir una fuente de datos distinta.
         _estilizar_header(table_resumen.cell(0, 0).merge(table_resumen.cell(1, 0)), 'Clasificación')
         _estilizar_header(table_resumen.cell(0, 1).merge(table_resumen.cell(0, 2)), 'Planificado')
-        _estilizar_header(table_resumen.cell(0, 3).merge(table_resumen.cell(0, 4)), 'Realizado')
+        _estilizar_header(table_resumen.cell(0, 3).merge(table_resumen.cell(0, 7)), 'Realizado')
         _estilizar_header(table_resumen.cell(1, 1), 'Cantidad')
         _estilizar_header(table_resumen.cell(1, 2), 'Hon (UF)')
         _estilizar_header(table_resumen.cell(1, 3), 'Cantidad')
         _estilizar_header(table_resumen.cell(1, 4), 'Hon (UF)')
+        _estilizar_header(table_resumen.cell(1, 5), 'Dentro Plan (UF)')
+        _estilizar_header(table_resumen.cell(1, 6), 'Fuera Plan (UF)')
+        _estilizar_header(table_resumen.cell(1, 7), 'Fuera Plan — MCL (UF)')
 
         for tipo, titulo_seccion, _color in secciones:
             df_tipo_resumen = df_informes_scope[df_informes_scope['tipo_informe'] == tipo]
@@ -3456,13 +3464,36 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
             n_realizado = len(df_realizado_resumen)
             uf_realizado = df_realizado_resumen['honorarios_estimados'].sum()
 
+            # Si no hay filas Realizado, .apply() sobre una Serie vacía no puede inferir
+            # dtype bool, y el ~ posterior produce una máscara "vacía" que al indexar
+            # devuelve un DataFrame sin columnas (KeyError al pedir 'honorarios_estimados').
+            # Se evita calculando directo 0.0 en ese caso, sin pasar por la máscara.
+            if df_realizado_resumen.empty:
+                uf_dentro_plan = uf_fuera_plan = uf_fuera_plan_mcl = 0.0
+            else:
+                if 'id_mcl_origen' in df_realizado_resumen.columns:
+                    dentro_plan_mask = df_realizado_resumen['id_mcl_origen'].apply(_campo_valido)
+                else:
+                    dentro_plan_mask = pd.Series(False, index=df_realizado_resumen.index)
+                df_fuera_plan_resumen = df_realizado_resumen[~dentro_plan_mask]
+                uf_dentro_plan = df_realizado_resumen[dentro_plan_mask]['honorarios_estimados'].sum()
+                uf_fuera_plan = df_fuera_plan_resumen['honorarios_estimados'].sum()
+                if 'tramo_uf' in df_fuera_plan_resumen.columns:
+                    es_mcl_resumen = df_fuera_plan_resumen['tramo_uf'].astype(str).str.contains('MCL|> 5', case=False, na=False)
+                    uf_fuera_plan_mcl = df_fuera_plan_resumen[es_mcl_resumen]['honorarios_estimados'].sum()
+                else:
+                    uf_fuera_plan_mcl = 0.0
+
             row_cells = table_resumen.add_row().cells
             row_cells[0].text = titulo_seccion.split('. ', 1)[-1]
             row_cells[1].text = str(n_planificado)
             row_cells[2].text = f"{uf_planificado:,.2f}"
             row_cells[3].text = str(n_realizado)
             row_cells[4].text = f"{uf_realizado:,.2f}"
-            for j in range(5):
+            row_cells[5].text = f"{uf_dentro_plan:,.2f}"
+            row_cells[6].text = f"{uf_fuera_plan:,.2f}"
+            row_cells[7].text = f"{uf_fuera_plan_mcl:,.2f}"
+            for j in range(8):
                 if row_cells[j].paragraphs[0].runs:
                     row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
                 if j > 0:
@@ -4169,19 +4200,25 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     else:
         doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
 
-    # --- FLUJO DEL MES: PLAN VS. FUERA DE PLAN (solo Mensual) — concilia lo
-    # comprometido/cumplido en el Plan Mensual de cada ajustador con lo ejecutado en
-    # la semana sobre casos que nunca pasaron por ese plan. Reutiliza
+    # --- ANEXO: CUMPLIMIENTO DEL PLAN MENSUAL POR AJUSTADOR (solo Mensual) — mide el
+    # compromiso personal de cada ajustador con su propio Plan Mensual (lo comprometido/
+    # cumplido en ese plan, versus lo ejecutado fuera de él). Reutiliza
     # calcular_conciliacion_mensual(), la misma función que usa la vista en vivo del
-    # Planificador Mensual, para que ambos muestren siempre los mismos números. ---
+    # Planificador Mensual, para que ambos muestren siempre los mismos números. No es
+    # comparable en forma directa con los totales IFL/Ajustes/Otros WIP de las secciones
+    # anteriores: solo incluye a los ajustadores que registraron un Plan Mensual para
+    # este período, y el desglose Dentro/Fuera de Plan por categoría ya vive en la
+    # tabla "Resumen Entregables" de más arriba. ---
     if tipo_periodo == "Mensual":
         doc.add_page_break()
-        doc.add_heading('11. Flujo del Mes: Plan vs. Fuera de Plan', level=1)
+        doc.add_heading('11. Anexo: Cumplimiento del Plan Mensual por Ajustador', level=1)
         doc.add_paragraph(
             'Honorarios (UF) de lo comprometido y cumplido en el Plan Mensual de cada ajustador, '
             'versus lo ejecutado en la semana sobre casos que nunca estuvieron en ese plan ("Fuera '
-            'del Plan"). El total de Fuera del Plan considera todos los casos; se desagrega además '
-            'por MCL para distinguir los casos de Mayor Complejidad y Monto de los demás.'
+            'del Plan"). Solo incluye a los ajustadores con Plan Mensual registrado en este período, '
+            'por lo que no se concilia en forma directa con los totales de la sección "Resumen '
+            'Entregables" anterior. Se desagrega además por MCL para distinguir los casos de Mayor '
+            'Complejidad y Monto de los demás.'
         ).runs[0].font.italic = True
 
         col_aj_flujo = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else (df_bm.columns[9] if df_bm.shape[1] > 9 else None)
@@ -5291,16 +5328,26 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
             return 0.0, 0.0, 0.0, 0.0
         return tuple(num(x) for x in m.groups())
 
-    def filas_flujo_mes():
-        """Filas de la tabla de '11. Flujo del Mes: Plan vs. Fuera de Plan', una por
-        ajustador: (ajustador, plan_realizado, fuera_del_plan, fuera_mcl, flujo_total).
-        No se usa bloque(): esa sección tiene un párrafo de descripción ANTES de la
-        tabla con el mismo h1/h2/h3, y bloque() devolvería ese párrafo (sin tabla) en
-        vez de la tabla, al ser el primero en aparecer."""
-        for b in blocks:
-            if b['h1'] == '11. Flujo del Mes: Plan vs. Fuera de Plan' and b['table'] is not None:
-                return [(f[0], num(f[1]), num(f[2]), num(f[3]), num(f[4])) for f in b['table']['rows']]
-        return []
+    def particion_financiera(h2):
+        """Separa las filas de tabla_resumen_entregables(h2) en IFL / Ajustes / Otros
+        WIP y suma, para cada grupo, (plan_cant, plan_uf, real_cant, real_uf,
+        dentro_plan_uf, fuera_plan_uf, fuera_plan_mcl_uf). Usa las columnas 5-7
+        agregadas a la tabla "Resumen Entregables" (Dentro Plan/Fuera Plan/MCL),
+        que ya vienen reconciliadas con el Real. UF de cada categoría porque salen
+        del mismo campo id_mcl_origen sobre las mismas filas deduplicadas."""
+        filas = tabla_resumen_entregables(h2)
+
+        def _sumar(fs):
+            return (sum(num(f[1]) for f in fs), sum(num(f[2]) for f in fs),
+                    sum(num(f[3]) for f in fs), sum(num(f[4]) for f in fs),
+                    sum(num(f[5]) for f in fs if len(f) > 5),
+                    sum(num(f[6]) for f in fs if len(f) > 6),
+                    sum(num(f[7]) for f in fs if len(f) > 7))
+
+        fila_ifl = [f for f in filas if f[0] == 'Informes Finales de Liquidación']
+        fila_ajustes = [f for f in filas if f[0] == 'Ajustes']
+        filas_otros = [f for f in filas if f[0] not in ('Informes Finales de Liquidación', 'Ajustes')]
+        return {'IFL': _sumar(fila_ifl), 'Ajustes': _sumar(fila_ajustes), 'Otros WIP': _sumar(filas_otros)}
 
     MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
                 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -5477,7 +5524,7 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     if os.path.exists(LOGO_PLANTILLA_PATH):
         sl.shapes.add_picture(LOGO_PLANTILLA_PATH, Inches(0.7), Inches(0.62), width=Inches(3.4))
     txt(sl, 'GERENCIA DE LIQUIDACIÓN  ·  REPORTE EJECUTIVO', 0.7, 2.0, 11.0, 0.4, size=13, bold=True, color=C_TEAL, remap=False)
-    txt(sl, 'Resumen de Entregables y Stock', 0.65, 2.5, 11.6, 1.1, size=40, bold=True, color=C_WHITE, remap=False)
+    txt(sl, 'Cumplimiento del Mes · Resumen Ejecutivo', 0.65, 2.5, 11.6, 1.1, size=36, bold=True, color=C_WHITE, remap=False)
     txt(sl, f'{mes_nombre}  ·  {mes_opcion}', 0.7, 3.6, 10.5, 0.6, size=21, color=C_TEAL_LIGHT, remap=False)
     rect(sl, 0.7, 5.7, 1.2, 0.02, fill=C_TEAL, remap=False)
     txt(sl, 'Grandes resúmenes + respaldo con el detalle completo', 0.7, 5.9, 10.0, 0.38, size=13, bold=True, color=C_WHITE, remap=False)
@@ -5489,11 +5536,25 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     slides_info.append((sl, 'Resumen Ejecutivo'))
     cant_plan, uf_plan, cant_real, uf_real = totales_resumen('Resumen Entregables General')
     pct_cant = (cant_real / cant_plan * 100) if cant_plan else 0
-    pct_uf = (uf_real / uf_plan * 100) if uf_plan else 0
     pill(sl, 'PLANIFICADOS', int(cant_plan), 'entregables', 0.4, 0.75, val_color=C_NAVY, w=3.0)
     pill(sl, 'REALIZADOS', int(cant_real), f'{pct_cant:.0f}% cumplimiento', 3.6, 0.75, val_color=C_GREEN, w=3.0)
-    pill(sl, 'UF PLANIFICADAS', f'{uf_plan:,.0f}', 'honorarios', 6.95, 0.75, val_color=C_NAVY, w=3.0)
-    pill(sl, 'UF REALIZADAS', f'{uf_real:,.0f}', f'{pct_uf:.0f}% cumplimiento', 10.15, 0.75, val_color=C_GREEN, w=2.8)
+
+    # Las UF no se muestran como un solo total: mezclar IFL (ingreso real) con Ajustes
+    # y el resto de WIP en una sola cifra no tiene lectura de negocio (ver slide
+    # "Resultado Financiero del Mes"). Se desagregan aquí por la misma categoría.
+    particion_gral = particion_financiera('Resumen Entregables General')
+    x0_cat, w_cat, gap_cat = 6.95, 1.95, 0.15
+    for i, (nombre, color) in enumerate([('IFL', C_NAVY), ('Ajustes', C_GOLD), ('Otros WIP', RGBColor(0x6B, 0x72, 0x80))]):
+        _, p_uf, _, r_uf, _, _, _ = particion_gral[nombre]
+        x = x0_cat + i * (w_cat + gap_cat)
+        rect(sl, x, 0.75, w_cat, 1.3, fill=C_STEEL)
+        rect(sl, x, 0.75, w_cat, 0.06, fill=color)
+        txt(sl, nombre.upper(), x + 0.1, 0.85, w_cat - 0.2, 0.24, size=8.5, bold=True, color=color, align=PP_ALIGN.CENTER)
+        txt(sl, f'{p_uf:,.0f}', x + 0.05, 1.12, w_cat / 2 - 0.05, 0.5, size=15, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
+        txt(sl, f'{r_uf:,.0f}', x + w_cat / 2, 1.12, w_cat / 2 - 0.05, 0.5, size=15, bold=True, color=C_GREEN, align=PP_ALIGN.CENTER)
+        txt(sl, 'Plan UF', x + 0.05, 1.62, w_cat / 2 - 0.05, 0.2, size=7, color=C_SUB, align=PP_ALIGN.CENTER)
+        txt(sl, 'Real UF', x + w_cat / 2, 1.62, w_cat / 2 - 0.05, 0.2, size=7, color=C_SUB, align=PP_ALIGN.CENTER)
+
     filas_resumen = tabla_resumen_entregables('Resumen Entregables General')
     rows_t = []
     for f in filas_resumen:
@@ -5509,76 +5570,59 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     header(sl, 'Resultado Financiero del Mes', subtitulo=mes_nombre)
     slides_info.append((sl, 'Resumen Ejecutivo'))
     txt(sl, 'Solo los Informes Finales de Liquidación (IFL) generan ingreso real; Ajustes y el resto de entregables '
-        'son esfuerzo en proceso (WIP) hacia un futuro IFL.', 0.4, 0.72, 12.5, 0.4, size=10, italic=True, color=C_MID)
+        'son esfuerzo en proceso (WIP) hacia un futuro IFL. Dentro de lo Realizado se desglosa además cuánto '
+        'estaba comprometido en el Plan Mensual del ajustador ("Dentro de Plan") y cuánto se ejecutó sin estarlo '
+        '("Fuera de Plan").', 0.4, 0.68, 12.5, 0.5, size=9.5, italic=True, color=C_MID)
 
-    filas_resumen_fin = tabla_resumen_entregables('Resumen Entregables General')
-    fila_ifl = next((f for f in filas_resumen_fin if f[0] == 'Informes Finales de Liquidación'), None)
-    fila_ajustes = next((f for f in filas_resumen_fin if f[0] == 'Ajustes'), None)
-    filas_otros_wip = [f for f in filas_resumen_fin if f[0] not in ('Informes Finales de Liquidación', 'Ajustes')]
-
-    def _totales_de_filas(filas):
-        return (sum(num(f[1]) for f in filas), sum(num(f[2]) for f in filas),
-                sum(num(f[3]) for f in filas), sum(num(f[4]) for f in filas))
-
+    particion_fin = particion_financiera('Resumen Entregables General')
     paneles_fin = [
-        ('💰 INGRESOS · IFL', C_NAVY, _totales_de_filas([fila_ifl] if fila_ifl else [])),
-        ('⚙️ WIP · AJUSTES', C_GOLD, _totales_de_filas([fila_ajustes] if fila_ajustes else [])),
-        ('📦 WIP · OTROS ENTREGABLES', RGBColor(0x6B, 0x72, 0x80), _totales_de_filas(filas_otros_wip)),
+        ('💰 INGRESOS · IFL', C_NAVY, particion_fin['IFL']),
+        ('⚙️ WIP · AJUSTES', C_GOLD, particion_fin['Ajustes']),
+        ('📦 WIP · OTROS ENTREGABLES', RGBColor(0x6B, 0x72, 0x80), particion_fin['Otros WIP']),
     ]
     ancho_panel, gap_panel, x0_fin = 3.9, 0.3, 0.4
-    for i, (titulo, color, (cp, up, cr, ur)) in enumerate(paneles_fin):
+    for i, (titulo, color, (cp, up, cr, ur, uf_dentro, uf_fuera, uf_fuera_mcl)) in enumerate(paneles_fin):
         x = x0_fin + i * (ancho_panel + gap_panel)
-        pct = (cr / cp * 100) if cp else 0
-        rect(sl, x, 1.3, ancho_panel, 4.9, fill=C_STEEL)
-        rect(sl, x, 1.3, ancho_panel, 0.08, fill=color)
-        txt(sl, titulo, x + 0.25, 1.55, ancho_panel - 0.5, 0.4, size=12.5, bold=True, color=color)
-        txt(sl, f'{cp:.0f}', x + 0.25, 2.15, ancho_panel / 2 - 0.3, 0.75, size=28, bold=True, color=C_NAVY)
-        txt(sl, 'Planificados', x + 0.25, 2.9, ancho_panel / 2 - 0.3, 0.3, size=8.5, color=C_SUB)
-        txt(sl, f'{cr:.0f}', x + ancho_panel / 2 + 0.05, 2.15, ancho_panel / 2 - 0.3, 0.75, size=28, bold=True, color=C_GREEN)
-        txt(sl, 'Realizados', x + ancho_panel / 2 + 0.05, 2.9, ancho_panel / 2 - 0.3, 0.3, size=8.5, color=C_SUB)
-        txt(sl, f'{pct:.0f}% cumplimiento', x + 0.25, 3.4, ancho_panel - 0.5, 0.35, size=11, bold=True, color=C_MID)
-        txt(sl, f'UF planificadas: {up:,.2f}', x + 0.25, 3.95, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
-        txt(sl, f'UF realizadas: {ur:,.2f}', x + 0.25, 4.25, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
+        mitad = ancho_panel / 2 - 0.3
+        pct_cant = (cr / cp * 100) if cp else 0
+        pct_uf = (ur / up * 100) if up else 0
+        rect(sl, x, 1.28, ancho_panel, 4.75, fill=C_STEEL)
+        rect(sl, x, 1.28, ancho_panel, 0.08, fill=color)
+        txt(sl, titulo, x + 0.25, 1.46, ancho_panel - 0.5, 0.35, size=12, bold=True, color=color)
+        # Cantidad y UF con el mismo tamaño y peso: ninguna de las dos es "la cifra
+        # secundaria" del panel.
+        txt(sl, f'{cp:.0f}', x + 0.25, 1.92, mitad, 0.62, size=23, bold=True, color=C_NAVY)
+        txt(sl, 'Planificados', x + 0.25, 2.54, mitad, 0.26, size=8, color=C_SUB)
+        txt(sl, f'{cr:.0f}', x + ancho_panel / 2 + 0.05, 1.92, mitad, 0.62, size=23, bold=True, color=C_GREEN)
+        txt(sl, 'Realizados', x + ancho_panel / 2 + 0.05, 2.54, mitad, 0.26, size=8, color=C_SUB)
+        txt(sl, f'{up:,.2f}', x + 0.25, 2.92, mitad, 0.62, size=23, bold=True, color=C_NAVY)
+        txt(sl, 'UF Planificadas', x + 0.25, 3.54, mitad, 0.26, size=8, color=C_SUB)
+        txt(sl, f'{ur:,.2f}', x + ancho_panel / 2 + 0.05, 2.92, mitad, 0.62, size=23, bold=True, color=C_GREEN)
+        txt(sl, 'UF Realizadas', x + ancho_panel / 2 + 0.05, 3.54, mitad, 0.26, size=8, color=C_SUB)
+        txt(sl, f'{pct_cant:.0f}% cumpl. cantidad   ·   {pct_uf:.0f}% cumpl. UF',
+            x + 0.25, 3.95, ancho_panel - 0.5, 0.3, size=10, bold=True, color=C_MID)
+        rect(sl, x + 0.2, 4.35, ancho_panel - 0.4, 0.02, fill=color)
+        txt(sl, f'{uf_dentro:,.2f}', x + 0.25, 4.5, mitad, 0.45, size=16, bold=True, color=C_NAVY)
+        txt(sl, 'Dentro de Plan (UF)', x + 0.25, 4.95, mitad, 0.24, size=7.5, color=C_SUB)
+        txt(sl, f'{uf_fuera:,.2f}', x + ancho_panel / 2 + 0.05, 4.5, mitad, 0.45, size=16, bold=True, color=C_GOLD)
+        txt(sl, 'Fuera de Plan (UF)', x + ancho_panel / 2 + 0.05, 4.95, mitad, 0.24, size=7.5, color=C_SUB)
 
-    # ── Slide: Flujo del Mes: Plan vs. Fuera de Plan ──
-    sl = blank()
-    header(sl, 'Flujo del Mes: Plan vs. Fuera de Plan', subtitulo=mes_nombre)
-    slides_info.append((sl, 'Resumen Ejecutivo'))
-    txt(sl, 'Honorarios (UF) de lo comprometido/cumplido en el Plan Mensual de cada ajustador, versus lo '
-        'ejecutado en la semana sobre casos que nunca estuvieron en ese plan ("Fuera del Plan"). El total '
-        'considera todos los casos; se desagrega por MCL solo como detalle adicional.',
-        0.4, 0.72, 12.5, 0.5, size=10, italic=True, color=C_MID)
+    tot_fuera_plan = sum(p[2][5] for p in paneles_fin)
+    tot_fuera_plan_mcl = sum(p[2][6] for p in paneles_fin)
+    tot_fuera_plan_no_mcl = tot_fuera_plan - tot_fuera_plan_mcl
+    txt(sl, f'Detalle de lo Fuera de Plan (las 3 categorías): MCL {tot_fuera_plan_mcl:,.2f} UF   ·   '
+        f'No MCL {tot_fuera_plan_no_mcl:,.2f} UF   ·   Total {tot_fuera_plan:,.2f} UF',
+        0.4, 6.18, 12.5, 0.3, size=9.5, italic=True, color=C_MID)
 
-    filas_flujo = filas_flujo_mes()
-    tot_plan_flujo = sum(f[1] for f in filas_flujo)
-    tot_fuera_flujo = sum(f[2] for f in filas_flujo)
-    tot_fuera_mcl_flujo = sum(f[3] for f in filas_flujo)
-    tot_fuera_no_mcl_flujo = tot_fuera_flujo - tot_fuera_mcl_flujo
-    tot_flujo_total = sum(f[4] for f in filas_flujo)
-
-    paneles_flujo = [
-        ('📋 PLAN REALIZADO', C_NAVY, f'{tot_plan_flujo:,.2f}', 'UF de hitos cumplidos del Plan Mensual'),
-        ('➕ FUERA DEL PLAN', C_GOLD, f'{tot_fuera_flujo:,.2f}', f'MCL: {tot_fuera_mcl_flujo:,.2f} UF  ·  No MCL: {tot_fuera_no_mcl_flujo:,.2f} UF'),
-        ('💰 FLUJO TOTAL DEL MES', C_GREEN, f'{tot_flujo_total:,.2f}', 'UF ejecutadas en el mes (plan + fuera de plan)'),
-    ]
-    ancho_panel_fl, gap_panel_fl, x0_fl = 3.9, 0.3, 0.4
-    for i, (titulo, color, valor, sub) in enumerate(paneles_flujo):
-        x = x0_fl + i * (ancho_panel_fl + gap_panel_fl)
-        rect(sl, x, 1.35, ancho_panel_fl, 1.85, fill=C_STEEL)
-        rect(sl, x, 1.35, ancho_panel_fl, 0.08, fill=color)
-        txt(sl, titulo, x + 0.25, 1.6, ancho_panel_fl - 0.5, 0.35, size=12, bold=True, color=color)
-        txt(sl, valor, x + 0.25, 2.05, ancho_panel_fl - 0.5, 0.7, size=28, bold=True, color=C_NAVY)
-        txt(sl, sub, x + 0.25, 2.75, ancho_panel_fl - 0.5, 0.4, size=8.5, color=C_SUB)
-
-    rows_flujo = [
-        [f[0], f'{f[1]:,.2f}', f'{f[2]:,.2f}', f'{f[3]:,.2f}', f'{f[4]:,.2f}']
-        for f in sorted(filas_flujo, key=lambda x: x[0])
-    ]
-    if rows_flujo:
-        tabla(sl, ['Ajustador', 'Plan Realizado (UF)', 'Fuera del Plan (UF)', '— MCL (UF)', 'Flujo Total (UF)'],
-              rows_flujo, 0.4, 3.5, 12.5, 3.1, hdr_color=C_NAVY, fuente=10)
-    else:
-        empty_state(sl, 'No hay Planes Mensuales registrados para este período.')
+    # Nota: ya no hay una slide "Flujo del Mes" separada. El desglose Dentro/Fuera de
+    # Plan ahora vive dentro de cada panel de "Resultado Financiero del Mes" (arriba),
+    # calculado con el mismo id_mcl_origen sobre las mismas filas que ya se muestran
+    # ahí, para que no haya dos totales de UF distintos que no se concilien entre sí.
+    # La tabla de cumplimiento del Plan Mensual por ajustador (distinta: mide el
+    # compromiso propio de cada ajustador, no la categoría IFL/Ajustes/WIP) sigue
+    # existiendo en el Word -sección "11. Anexo..."- y se agrega sola como slide de
+    # Respaldo más abajo, vía el mismo loop genérico que arma todas las slides de
+    # respaldo a partir de los bloques del Word.
 
     # ── Slide: Resumen por Área ──
     sl = blank()
@@ -5598,8 +5642,17 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         txt(sl, 'Planificados', x0 + 0.3, 2.35, 2.7, 0.3, size=9, color=C_SUB)
         txt(sl, f'{cr:.0f}', x0 + 3.1, 1.5, 2.7, 0.9, size=36, bold=True, color=C_GREEN)
         txt(sl, 'Realizados', x0 + 3.1, 2.35, 2.7, 0.3, size=9, color=C_SUB)
-        txt(sl, f'{pct:.0f}% de cumplimiento   ·   {up:,.0f} UF planificadas   ·   {ur:,.0f} UF realizadas',
-            x0 + 0.3, 2.85, 5.4, 0.4, size=10, bold=True, color=C_MID)
+        txt(sl, f'{pct:.0f}% de cumplimiento', x0 + 0.3, 2.85, 5.4, 0.3, size=10, bold=True, color=C_MID)
+
+        # UF por categoría (no un total mezclado): mismo criterio que la slide
+        # "Resumen General de Entregables".
+        particion_area = particion_financiera(h2)
+        for j, (nombre, ccolor) in enumerate([('IFL', C_NAVY), ('Ajustes', C_GOLD), ('Otros WIP', RGBColor(0x6B, 0x72, 0x80))]):
+            _, p_uf, _, r_uf, _, _, _ = particion_area[nombre]
+            xx = x0 + 0.3 + j * 1.85
+            txt(sl, nombre.upper(), xx, 3.2, 1.8, 0.2, size=7.5, bold=True, color=ccolor)
+            txt(sl, f'{p_uf:,.0f} / {r_uf:,.0f} UF', xx, 3.4, 1.8, 0.24, size=9, bold=True, color=C_TEXT)
+
         filas = tabla_resumen_entregables(h2)
         rows_t = []
         for f in filas:
@@ -5607,7 +5660,7 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
             pct_f = (c_r / c_p * 100) if c_p else 0
             rows_t.append([f[0], f'{c_p:.0f}', f'{c_r:.0f}', f'{pct_f:.0f}%'])
         if rows_t:
-            tabla(sl, ['Categoría', 'Plan.', 'Real.', '%'], rows_t, x0, 3.45, 6.0, 3.1,
+            tabla(sl, ['Categoría', 'Plan.', 'Real.', '%'], rows_t, x0, 3.85, 6.0, 2.7,
                   hdr_color=color, col_widths=[4.2, 0.6, 0.6, 0.6], fuente=9)
 
     # ── Slides: Distribución de Estado del Stock — Estado + Sub-estado desagregado ──
@@ -5690,7 +5743,8 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
     def normalizar_tabla_resumen(t):
         headers, rows = t['headers'], t['rows']
         if rows and rows[0][0] == 'Clasificación':
-            headers = ['Categoría', 'Plan. Cant.', 'Plan. UF', 'Real. Cant.', 'Real. UF']
+            headers = ['Categoría', 'Plan. Cant.', 'Plan. UF', 'Real. Cant.', 'Real. UF',
+                       'Dentro Plan (UF)', 'Fuera Plan (UF)', 'Fuera Plan MCL (UF)']
             rows = rows[1:]
         return headers, rows
 
