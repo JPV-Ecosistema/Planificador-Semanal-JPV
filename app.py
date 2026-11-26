@@ -120,6 +120,65 @@ def _campo_valido(valor):
         pass
     return bool(valor)
 
+# ÁREAS: agrupación de más alto nivel sobre la División, usada para ordenar y
+# subdividir tablas (Ingeniería primero, luego Equipo Móvil, el resto al final). Se
+# clasifica por palabra clave para no depender de que el texto de División calce exacto.
+# (Antes estaba duplicado como función local idéntica en dos reportes distintos.)
+ORDEN_AREAS = ['Ingeniería', 'Equipo Móvil', 'Otras / Sin Clasificar']
+
+def clasificar_area(division_str):
+    d = str(division_str or '').lower()
+    if 'ingenier' in d:
+        return 'Ingeniería'
+    elif 'equipo móvil' in d or 'equipo movil' in d:
+        return 'Equipo Móvil'
+    return 'Otras / Sin Clasificar'
+
+def indice_area(division_str):
+    return ORDEN_AREAS.index(clasificar_area(division_str))
+
+def generar_velocimetro_estatico(valor, titulo):
+    """Dibuja un velocímetro (gauge) estático en PNG con matplotlib, para incrustar en
+    reportes Word (a diferencia de los velocímetros de Plotly usados en pantalla, que
+    no se pueden incrustar en un .docx). Pura y sin estado -antes estaba duplicada,
+    idéntica, dentro de dos generadores de reportes distintos."""
+    import io
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    valor_seguro = min(max(float(valor), 0.0), 100.0)
+    fig, ax = plt.subplots(figsize=(5, 3.2))
+    center, radius, width = (0, 0), 1.0, 0.3
+
+    def draw_wedge(start, end, color):
+        wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
+        ax.add_patch(wedge)
+
+    draw_wedge(90, 180, '#d9534f')
+    draw_wedge(36, 90, '#f0ad4e')
+    draw_wedge(0, 36, '#28a745')
+
+    angle_progress = 180 - (valor_seguro * 1.8)
+    theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
+    r_line = radius - (width / 2)
+    ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
+
+    for t in [0, 20, 40, 60, 80, 100]:
+        ang = np.radians(180 - t * 1.8)
+        ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
+        ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
+
+    ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
+    ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
+    ax.set_xlim(-1.3, 1.3)
+    ax.set_ylim(-0.1, 1.4)
+    ax.axis('off')
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
 def get_week_identifier(offset_weeks=0):
     """Devuelve el ID de la semana (lunes a domingo) que contiene "hoy + offset_weeks".
     Se ancla siempre al lunes de esa semana: calcularlo sobre la fecha del día exacto
@@ -180,12 +239,21 @@ def fila_descarga(badge_texto, badge_colores, titulo, descripcion):
 # BLOQUE 1: FUNCIONES DE MEMORIA Y BASE DE DATOS LOCAL/NUBE
 # VERSIÓN: 2.1.5 (Advertencia de Filtros en Reporte de Acciones)
 # ---------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _crear_cliente_google():
+    """Crea y autoriza el cliente de gspread. cache_resource (no cache_data: esto es
+    una conexión, no datos) evita re-autenticar en cada rerun. Si falla, lanza la
+    excepción -no devuelve None- para que Streamlit NUNCA cachee un fallo transitorio;
+    la próxima llamada reintenta la autenticación desde cero en vez de quedar "pegada"
+    en None hasta que se reinicie el proceso."""
+    scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    return gspread.authorize(creds)
+
 def get_google_client():
     try:
         if "gcp_service_account" in st.secrets and "google_sheet_url" in st.secrets:
-            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-            return gspread.authorize(creds)
+            return _crear_cliente_google()
     except Exception as e:
         st.error(f"⚠️ Error crítico de conexión a Google Cloud: {e}")
     return None
@@ -1946,6 +2014,246 @@ def sincronizar_y_cargar_datos(forzar_sync, dias_semana_target):
                 
     return df_week, df_raw, ajustadores_validos
 
+def _firma_persistencia():
+    """Hash barato (nombre + fecha de modificación de cada .json en persistence/) que
+    cambia apenas se guarda un plan, se sube una Base Maestra o se sincroniza desde la
+    nube. Se usa como parte de la clave de caché de sincronizar_y_cargar_datos_cacheado
+    para que CUALQUIER cambio invalide el caché automáticamente -- nunca se muestra
+    data vieja a propósito por ahorrar una lectura de disco."""
+    try:
+        archivos = [f for f in os.listdir(PERSISTENCE_DIR) if f.endswith('.json')]
+        return tuple(sorted(
+            (f, os.path.getmtime(os.path.join(PERSISTENCE_DIR, f)))
+            for f in archivos
+        ))
+    except Exception:
+        return None
+
+@st.cache_data(show_spinner=False)
+def _sincronizar_y_cargar_datos_cached(forzar_sync, dias_semana_target, firma_persistencia):
+    # OJO: el parámetro NO puede llamarse "_firma" (con guion bajo al inicio) -- en
+    # Streamlit, los parámetros de una función @st.cache_data que empiezan con "_" se
+    # EXCLUYEN a propósito del cálculo de la clave de caché (sirve para pasar objetos
+    # no-hasheables). Con ese nombre, cambios reales en el disco nunca invalidaban el
+    # caché y se seguía mostrando data vieja indefinidamente.
+    return sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
+
+def sincronizar_y_cargar_datos_cacheado(forzar_sync, dias_semana_target):
+    """Envoltorio con caché de sincronizar_y_cargar_datos: en una vista con varias
+    pestañas (st.tabs ejecuta el contenido de TODAS, no solo la visible), cada clic
+    releía y reconstruía todos los planes de todos los ajustadores para cada pestaña.
+    Con la misma 'dias_semana_target' y sin cambios en persistence/ (ver
+    _firma_persistencia), la segunda llamada es casi gratis."""
+    return _sincronizar_y_cargar_datos_cached(forzar_sync, tuple(dias_semana_target), _firma_persistencia())
+
+@st.cache_data(show_spinner=False)
+def _generar_exportables_dashboard_cached(target_week_id, week_id_obj, adherencia, ratio_plan,
+                                           uf_facturables_caja, uf_traccionadas_wip,
+                                           df_mcl_mostrar, df_mostrar, df_pie_qty, df_pie_uf,
+                                           df_com, df_adm):
+    """Genera el Excel y el Word descargables del Dashboard Ejecutivo (incluye los
+    velocímetros y gráficos de torta en matplotlib, lo más costoso de esta vista).
+    Se cachea porque antes se reconstruía en CADA render de vista_reportes -incluso al
+    hacer clic en algo de las pestañas Operacional o Gantt, ya que st.tabs ejecuta el
+    contenido de las 3 pestañas siempre, no solo la visible- aunque nadie haya pedido
+    descargar nada del Dashboard."""
+    import io
+    from openpyxl import Workbook
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    dash_wb = Workbook()
+    ws_resumen = dash_wb.active
+    ws_resumen.title = "Resumen Ejecutivo"
+
+    ws_resumen.append(["Métrica Financiera", "UF"])
+    ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", round(uf_facturables_caja, 2)])
+    ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", round(uf_traccionadas_wip, 2)])
+    ws_resumen.append([])
+
+    ws_resumen.append(["KPI Operativo", "Valor (%)"])
+    ws_resumen.append(["Adherencia al Plan", round(adherencia, 1)])
+    ws_resumen.append(["Ratio de Esfuerzo Planificado", round(ratio_plan, 1)])
+
+    excel_dash_buffer = io.BytesIO()
+    dash_wb.save(excel_dash_buffer)
+
+    # --- DOCUMENTO WORD - DISEÑO TIPO DASHBOARD ---
+    dash_doc = Document()
+    agregar_logo_word(dash_doc)
+    dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
+
+    # 1. Tabla Financiera VIP (Se mantiene grande en la portada)
+    dash_doc.add_heading('💰 1. Valorización de Cartera y Facturación Proyectada', level=1)
+    t_fin = dash_doc.add_table(rows=2, cols=2)
+    t_fin.style = 'Table Grid'
+
+    t_fin.rows[0].cells[0].text = "Ingreso Efectivo Facturable (Caja)"
+    t_fin.rows[0].cells[1].text = "Valor Potencial Traccionado (WIP)"
+    formatear_cabecera_tabla(t_fin, "003366")
+
+    celda_caja = t_fin.rows[1].cells[0]
+    celda_caja.text = f"{uf_facturables_caja:,.2f} UF"
+    celda_caja.paragraphs[0].runs[0].font.size = Pt(22)
+    celda_caja.paragraphs[0].runs[0].font.bold = True
+    celda_caja.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
+    celda_caja.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    celda_wip = t_fin.rows[1].cells[1]
+    celda_wip.text = f"{uf_traccionadas_wip:,.2f} UF"
+    celda_wip.paragraphs[0].runs[0].font.size = Pt(22)
+    celda_wip.paragraphs[0].runs[0].font.bold = True
+    celda_wip.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
+    celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    dash_doc.add_paragraph("")
+
+    # 2. Tabla KPIs (MOTOR MATPLOTLIB OFFLINE)
+    dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
+    t_kpi = dash_doc.add_table(rows=1, cols=2)
+    t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    try:
+        img_adh_bytes = generar_velocimetro_estatico(adherencia, "Adherencia al Plan")
+        celda_img_adh = t_kpi.rows[0].cells[0]
+        celda_img_adh.paragraphs[0].add_run().add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
+        celda_img_adh.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        img_pro_bytes = generar_velocimetro_estatico(ratio_plan, "Ratio Planificado")
+        celda_img_pro = t_kpi.rows[0].cells[1]
+        celda_img_pro.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
+        celda_img_pro.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    except Exception:
+        t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
+        t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
+
+    # 3. Tabla MCL (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
+    if not df_mcl_mostrar.empty:
+        dash_doc.add_page_break()
+        dash_doc.add_heading('🏆 Radar de Casos MCL', level=1)
+        t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl_mostrar.columns))
+        t_mcl.style = 'Table Grid'
+        columnas_mcl = list(df_mcl_mostrar.columns)
+        for i, col_name in enumerate(columnas_mcl):
+            t_mcl.rows[0].cells[i].text = str(col_name)
+            t_mcl.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+        formatear_cabecera_tabla(t_mcl, "D9534F")
+
+        for row_val in df_mcl_mostrar.values.tolist():
+            row_cells = t_mcl.add_row().cells
+            for i, val in enumerate(row_val):
+                row_cells[i].text = str(val)
+                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
+
+    # 4. Tabla Entregables con Gráficos de Torta (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
+    if not df_mostrar.empty:
+        dash_doc.add_page_break()
+        dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
+
+        def generar_torta_estatica(labels, sizes, titulo):
+            import matplotlib.pyplot as plt
+            import io
+            fig, ax = plt.subplots(figsize=(6, 5))
+            wedges, texts, autotexts = ax.pie(
+                sizes,
+                autopct='%1.1f%%',
+                startangle=90,
+                pctdistance=0.75,
+                textprops=dict(color="w", weight="bold", fontsize=9),
+                wedgeprops=dict(edgecolor='w', linewidth=1)
+            )
+            ax.legend(
+                wedges, labels,
+                title="Entregables",
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.05),
+                fontsize=9
+            )
+            ax.set_title(titulo, fontsize=12, color='#003366', fontweight='bold', pad=15)
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
+            plt.close(fig)
+            return buf.getvalue()
+
+        try:
+            t_pies = dash_doc.add_table(rows=1, cols=2)
+            t_pies.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            if df_pie_qty['Cantidad'].sum() > 0:
+                img_qty = generar_torta_estatica(df_pie_qty['Entregable'].tolist(), df_pie_qty['Cantidad'].tolist(), "Cantidad de Entregables")
+                c_qty = t_pies.rows[0].cells[0]
+                c_qty.paragraphs[0].add_run().add_picture(io.BytesIO(img_qty), width=Cm(7.5))
+                c_qty.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            if df_pie_uf['UF'].sum() > 0:
+                img_uf = generar_torta_estatica(df_pie_uf['Entregable'].tolist(), df_pie_uf['UF'].tolist(), "Valorización en UF")
+                c_uf = t_pies.rows[0].cells[1]
+                c_uf.paragraphs[0].add_run().add_picture(io.BytesIO(img_uf), width=Cm(7.5))
+                c_uf.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            dash_doc.add_paragraph("")
+        except Exception:
+            pass
+
+        t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
+        t_ent.style = 'Table Grid'
+        for i, col_name in enumerate(df_mostrar.columns):
+            t_ent.rows[0].cells[i].text = str(col_name)
+            t_ent.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+        formatear_cabecera_tabla(t_ent, "28A745")
+
+        for row_val in df_mostrar.values.tolist():
+            row_cells = t_ent.add_row().cells
+            for i, val in enumerate(row_val):
+                row_cells[i].text = str(val)
+                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
+
+    # 5. Tablas Comerciales y Admin (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
+    if not df_com.empty or not df_adm.empty:
+        dash_doc.add_page_break()
+        dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
+
+        if not df_com.empty:
+            dash_doc.add_heading('🔵 Gestiones Comerciales', level=2)
+            t_com_w = dash_doc.add_table(rows=1, cols=3)
+            t_com_w.style = 'Table Grid'
+            encabezados_com = ["Fecha", "Ajustador", "Detalle de la Gestión"]
+            for i, titulo in enumerate(encabezados_com):
+                t_com_w.rows[0].cells[i].text = titulo
+                t_com_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+            formatear_cabecera_tabla(t_com_w, "004A99")
+
+            for _, row in df_com.iterrows():
+                row_cells = t_com_w.add_row().cells
+                row_cells[0].text = str(row['Fecha'])
+                row_cells[1].text = str(row['Ajustador'])
+                row_cells[2].text = str(row['Detalle de la Gestión'])
+                for cell in row_cells:
+                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
+            dash_doc.add_paragraph("")
+
+        if not df_adm.empty:
+            dash_doc.add_heading('⚪ Gestiones Administrativas', level=2)
+            t_adm_w = dash_doc.add_table(rows=1, cols=3)
+            t_adm_w.style = 'Table Grid'
+            encabezados_adm = ["Fecha", "Ajustador", "Detalle / Comités"]
+            for i, titulo in enumerate(encabezados_adm):
+                t_adm_w.rows[0].cells[i].text = titulo
+                t_adm_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+            formatear_cabecera_tabla(t_adm_w, "6C757D")
+
+            for _, row in df_adm.iterrows():
+                row_cells = t_adm_w.add_row().cells
+                row_cells[0].text = str(row['Fecha'])
+                row_cells[1].text = str(row['Ajustador'])
+                row_cells[2].text = str(row['Detalle / Comités'])
+                for cell in row_cells:
+                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
+
+    word_dash_buffer = io.BytesIO()
+    dash_doc.save(word_dash_buffer)
+
+    return excel_dash_buffer.getvalue(), word_dash_buffer.getvalue()
+
 # ---------------------------------------------------------
 # BLOQUE 4.3: VISTA - DASHBOARD EJECUTIVO (BI)
 # VERSIÓN: 4.3.10 (Paginación Inteligente y Optimización de Fuente)
@@ -2116,233 +2424,12 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
         else:
             st.caption("Sin gestiones administrativas válidas reportadas.")
             
-    # --- GENERADORES EXPORTACIÓN DASHBOARD ---
-    dash_wb = Workbook()
-    ws_resumen = dash_wb.active
-    ws_resumen.title = "Resumen Ejecutivo"
-    
-    ws_resumen.append(["Métrica Financiera", "UF"])
-    ws_resumen.append(["Ingreso Efectivo Facturable (Cierres/Rechazos)", round(uf_facturables_caja, 2)])
-    ws_resumen.append(["Valor Potencial Traccionado (WIP / Proceso)", round(uf_traccionadas_wip, 2)])
-    ws_resumen.append([])
-    
-    ws_resumen.append(["KPI Operativo", "Valor (%)"])
-    ws_resumen.append(["Adherencia al Plan", round(adherencia, 1)])
-    ws_resumen.append(["Ratio de Esfuerzo Planificado", round(ratio_plan, 1)])
-    
-    excel_dash_buffer = io.BytesIO()
-    dash_wb.save(excel_dash_buffer)
+    # --- GENERADORES EXPORTACIÓN DASHBOARD (cacheados, ver _generar_exportables_dashboard_cached) ---
+    excel_dash_bytes, word_dash_bytes = _generar_exportables_dashboard_cached(
+        target_week_id, week_id_obj, adherencia, ratio_plan, uf_facturables_caja, uf_traccionadas_wip,
+        df_mcl_mostrar, df_mostrar, df_pie_qty, df_pie_uf, df_com, df_adm
+    )
 
-    # --- DOCUMENTO WORD - DISEÑO TIPO DASHBOARD ---
-    dash_doc = Document()
-    agregar_logo_word(dash_doc)
-    dash_doc.add_heading(f'📊 Dashboard Ejecutivo y Cumplimiento - {week_id_obj}', 0)
-    
-    # 1. Tabla Financiera VIP (Se mantiene grande en la portada)
-    dash_doc.add_heading('💰 1. Valorización de Cartera y Facturación Proyectada', level=1)
-    t_fin = dash_doc.add_table(rows=2, cols=2)
-    t_fin.style = 'Table Grid'
-    
-    t_fin.rows[0].cells[0].text = "Ingreso Efectivo Facturable (Caja)"
-    t_fin.rows[0].cells[1].text = "Valor Potencial Traccionado (WIP)"
-    formatear_cabecera_tabla(t_fin, "003366")
-    
-    celda_caja = t_fin.rows[1].cells[0]
-    celda_caja.text = f"{uf_facturables_caja:,.2f} UF"
-    celda_caja.paragraphs[0].runs[0].font.size = Pt(22)
-    celda_caja.paragraphs[0].runs[0].font.bold = True
-    celda_caja.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
-    celda_caja.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    celda_wip = t_fin.rows[1].cells[1]
-    celda_wip.text = f"{uf_traccionadas_wip:,.2f} UF"
-    celda_wip.paragraphs[0].runs[0].font.size = Pt(22)
-    celda_wip.paragraphs[0].runs[0].font.bold = True
-    celda_wip.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 51, 102)
-    celda_wip.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    dash_doc.add_paragraph("")
-    
-    # 2. Tabla KPIs (MOTOR MATPLOTLIB OFFLINE)
-    dash_doc.add_heading('⏱️ 2. Métricas de Cumplimiento y Carga Operativa', level=1)
-    t_kpi = dash_doc.add_table(rows=1, cols=2)
-    t_kpi.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    def generar_velocimetro_estatico(valor, titulo):
-        import numpy as np
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as patches
-        valor_seguro = min(max(float(valor), 0.0), 100.0)
-        fig, ax = plt.subplots(figsize=(5, 3.2))
-        center, radius, width = (0, 0), 1.0, 0.3
-        
-        def draw_wedge(start, end, color):
-            wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
-            ax.add_patch(wedge)
-            
-        draw_wedge(90, 180, '#d9534f')
-        draw_wedge(36, 90, '#f0ad4e')
-        draw_wedge(0, 36, '#28a745')
-
-        angle_progress = 180 - (valor_seguro * 1.8)
-        theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
-        r_line = radius - (width / 2)
-        ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
-
-        for t in [0, 20, 40, 60, 80, 100]:
-            ang = np.radians(180 - t * 1.8)
-            ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
-            ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
-
-        ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
-        ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
-        ax.set_xlim(-1.3, 1.3)
-        ax.set_ylim(-0.1, 1.4)
-        ax.axis('off')
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
-        plt.close(fig)
-        return buf.getvalue()
-
-    try:
-        img_adh_bytes = generar_velocimetro_estatico(adherencia, "Adherencia al Plan")
-        celda_img_adh = t_kpi.rows[0].cells[0]
-        celda_img_adh.paragraphs[0].add_run().add_picture(io.BytesIO(img_adh_bytes), width=Cm(7.5))
-        celda_img_adh.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        img_pro_bytes = generar_velocimetro_estatico(ratio_plan, "Ratio Planificado")
-        celda_img_pro = t_kpi.rows[0].cells[1]
-        celda_img_pro.paragraphs[0].add_run().add_picture(io.BytesIO(img_pro_bytes), width=Cm(7.5))
-        celda_img_pro.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    except Exception as e:
-        t_kpi.rows[0].cells[0].text = f"Adherencia: {adherencia:.1f}%"
-        t_kpi.rows[0].cells[1].text = f"Ratio Planificado: {ratio_plan:.1f}%"
-        
-    # 3. Tabla MCL (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
-    if not df_mcl_mostrar.empty:
-        dash_doc.add_page_break()
-        dash_doc.add_heading('🏆 Radar de Casos MCL', level=1)
-        t_mcl = dash_doc.add_table(rows=1, cols=len(df_mcl_mostrar.columns))
-        t_mcl.style = 'Table Grid'
-        columnas_mcl = list(df_mcl_mostrar.columns)
-        for i, col_name in enumerate(columnas_mcl):
-            t_mcl.rows[0].cells[i].text = str(col_name)
-            t_mcl.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
-        formatear_cabecera_tabla(t_mcl, "D9534F")
-        
-        for row_val in df_mcl_mostrar.values.tolist():
-            row_cells = t_mcl.add_row().cells
-            for i, val in enumerate(row_val):
-                row_cells[i].text = str(val)
-                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
-    
-    # 4. Tabla Entregables con Gráficos de Torta (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
-    if not df_mostrar.empty:
-        dash_doc.add_page_break()
-        dash_doc.add_heading('🏭 3. Inventario de Producción (Entregables)', level=1)
-        
-        def generar_torta_estatica(labels, sizes, titulo):
-            import matplotlib.pyplot as plt
-            import io
-            fig, ax = plt.subplots(figsize=(6, 5))
-            wedges, texts, autotexts = ax.pie(
-                sizes, 
-                autopct='%1.1f%%', 
-                startangle=90, 
-                pctdistance=0.75,
-                textprops=dict(color="w", weight="bold", fontsize=9),
-                wedgeprops=dict(edgecolor='w', linewidth=1)
-            )
-            ax.legend(
-                wedges, labels, 
-                title="Entregables", 
-                loc="upper center", 
-                bbox_to_anchor=(0.5, -0.05), 
-                fontsize=9
-            )
-            ax.set_title(titulo, fontsize=12, color='#003366', fontweight='bold', pad=15)
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
-            plt.close(fig)
-            return buf.getvalue()
-
-        try:
-            t_pies = dash_doc.add_table(rows=1, cols=2)
-            t_pies.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
-            if df_pie_qty['Cantidad'].sum() > 0:
-                img_qty = generar_torta_estatica(df_pie_qty['Entregable'].tolist(), df_pie_qty['Cantidad'].tolist(), "Cantidad de Entregables")
-                c_qty = t_pies.rows[0].cells[0]
-                c_qty.paragraphs[0].add_run().add_picture(io.BytesIO(img_qty), width=Cm(7.5))
-                c_qty.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
-            if df_pie_uf['UF'].sum() > 0:
-                img_uf = generar_torta_estatica(df_pie_uf['Entregable'].tolist(), df_pie_uf['UF'].tolist(), "Valorización en UF")
-                c_uf = t_pies.rows[0].cells[1]
-                c_uf.paragraphs[0].add_run().add_picture(io.BytesIO(img_uf), width=Cm(7.5))
-                c_uf.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            dash_doc.add_paragraph("")
-        except Exception:
-            pass
-
-        t_ent = dash_doc.add_table(rows=1, cols=len(df_mostrar.columns))
-        t_ent.style = 'Table Grid'
-        for i, col_name in enumerate(df_mostrar.columns):
-            t_ent.rows[0].cells[i].text = str(col_name)
-            t_ent.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
-        formatear_cabecera_tabla(t_ent, "28A745")
-        
-        for row_val in df_mostrar.values.tolist():
-            row_cells = t_ent.add_row().cells
-            for i, val in enumerate(row_val):
-                row_cells[i].text = str(val)
-                row_cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
-        
-    # 5. Tablas Comerciales y Admin (CON SALTO DE PÁGINA Y FUENTE REDUCIDA)
-    if not df_com.empty or not df_adm.empty:
-        dash_doc.add_page_break()
-        dash_doc.add_heading('🤝 4. Gestión Estratégica Transversal', level=1)
-        
-        if not df_com.empty:
-            dash_doc.add_heading('🔵 Gestiones Comerciales', level=2)
-            t_com_w = dash_doc.add_table(rows=1, cols=3)
-            t_com_w.style = 'Table Grid'
-            encabezados_com = ["Fecha", "Ajustador", "Detalle de la Gestión"]
-            for i, titulo in enumerate(encabezados_com):
-                t_com_w.rows[0].cells[i].text = titulo
-                t_com_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
-            formatear_cabecera_tabla(t_com_w, "004A99") 
-            
-            for _, row in df_com.iterrows():
-                row_cells = t_com_w.add_row().cells
-                row_cells[0].text = str(row['Fecha'])
-                row_cells[1].text = str(row['Ajustador'])
-                row_cells[2].text = str(row['Detalle de la Gestión'])
-                for cell in row_cells:
-                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
-            dash_doc.add_paragraph("")
-        
-        if not df_adm.empty:
-            dash_doc.add_heading('⚪ Gestiones Administrativas', level=2)
-            t_adm_w = dash_doc.add_table(rows=1, cols=3)
-            t_adm_w.style = 'Table Grid'
-            encabezados_adm = ["Fecha", "Ajustador", "Detalle / Comités"]
-            for i, titulo in enumerate(encabezados_adm):
-                t_adm_w.rows[0].cells[i].text = titulo
-                t_adm_w.rows[0].cells[i].paragraphs[0].runs[0].font.size = Pt(9)
-            formatear_cabecera_tabla(t_adm_w, "6C757D") 
-            
-            for _, row in df_adm.iterrows():
-                row_cells = t_adm_w.add_row().cells
-                row_cells[0].text = str(row['Fecha'])
-                row_cells[1].text = str(row['Ajustador'])
-                row_cells[2].text = str(row['Detalle / Comités'])
-                for cell in row_cells:
-                    cell.paragraphs[0].runs[0].font.size = Pt(8.5)
-
-    word_dash_buffer = io.BytesIO()
-    dash_doc.save(word_dash_buffer)
-    
     # --- CENTRO DE DESCARGAS ---
     st.markdown("---")
     st.subheader("📥 Centro de Descargas")
@@ -2351,7 +2438,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                   "Mismos indicadores del BI en formato editable para análisis propio.")
     st.download_button(
         label="⬇️ Descargar Dashboard (Excel)",
-        data=excel_dash_buffer.getvalue(),
+        data=excel_dash_bytes,
         file_name=f"Dashboard_Ejecutivo_{target_week_id}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
@@ -2360,7 +2447,7 @@ def renderizar_dashboard_ejecutivo(df_week, target_week_id, week_id_obj):
                   "Versión imprimible del dashboard de indicadores (BI) de la semana.")
     st.download_button(
         label="⬇️ Descargar Dashboard (Word)",
-        data=word_dash_buffer.getvalue(),
+        data=word_dash_bytes,
         file_name=f"Resumen_Ejecutivo_{target_week_id}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         type="primary"
@@ -2478,43 +2565,6 @@ def renderizar_reporte_operacional(df_week, df_raw, ajustadores_validos, target_
             # MOTOR MATPLOTLIB OFFLINE PARA REPORTE OPERACIONAL (Exportación Word)
             t_kpi_op = op_doc.add_table(rows=1, cols=2)
             t_kpi_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-            def generar_velocimetro_estatico(valor, titulo):
-                import numpy as np
-                import matplotlib.pyplot as plt
-                import matplotlib.patches as patches
-                valor_seguro = min(max(float(valor), 0.0), 100.0)
-                fig, ax = plt.subplots(figsize=(5, 3.2))
-                center, radius, width = (0, 0), 1.0, 0.3
-
-                def draw_wedge(start, end, color):
-                    wedge = patches.Wedge(center, radius, start, end, width=width, facecolor=color, edgecolor='gray', linewidth=1)
-                    ax.add_patch(wedge)
-
-                draw_wedge(90, 180, '#d9534f')
-                draw_wedge(36, 90, '#f0ad4e')
-                draw_wedge(0, 36, '#28a745')
-
-                angle_progress = 180 - (valor_seguro * 1.8)
-                theta = np.linspace(np.radians(180), np.radians(angle_progress), 100)
-                r_line = radius - (width / 2)
-                ax.plot(r_line * np.cos(theta), r_line * np.sin(theta), color='black', linewidth=8, solid_capstyle='round')
-
-                for t in [0, 20, 40, 60, 80, 100]:
-                    ang = np.radians(180 - t * 1.8)
-                    ax.plot([radius * np.cos(ang), (radius + 0.05) * np.cos(ang)], [radius * np.sin(ang), (radius + 0.05) * np.sin(ang)], color='gray', lw=1.5)
-                    ax.text((radius + 0.15) * np.cos(ang), (radius + 0.15) * np.sin(ang), str(t), ha='center', va='center', fontsize=10, color='#333333')
-
-                ax.text(0, 0.15, f"{valor_seguro:.1f}%", ha='center', va='center', fontsize=28, fontweight='bold')
-                ax.text(0, 1.25, titulo, ha='center', va='center', fontsize=16, color='#003366', fontweight='bold')
-                ax.set_xlim(-1.3, 1.3)
-                ax.set_ylim(-0.1, 1.4)
-                ax.axis('off')
-
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=True)
-                plt.close(fig)
-                return buf.getvalue()
 
             try:
                 img_adh_op_bytes = generar_velocimetro_estatico(adh_aj, "Adherencia")
@@ -3217,22 +3267,6 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
                         }
         except Exception:
             pass
-
-    # --- ÁREAS: agrupación de más alto nivel sobre la División, usada para ordenar y
-    # subdividir tablas (Ingeniería primero, luego Equipo Móvil, el resto al final). Se
-    # clasifica por palabra clave para no depender de que el texto de División calce exacto.
-    ORDEN_AREAS = ['Ingeniería', 'Equipo Móvil', 'Otras / Sin Clasificar']
-
-    def clasificar_area(division_str):
-        d = str(division_str or '').lower()
-        if 'ingenier' in d:
-            return 'Ingeniería'
-        elif 'equipo móvil' in d or 'equipo movil' in d:
-            return 'Equipo Móvil'
-        return 'Otras / Sin Clasificar'
-
-    def indice_area(division_str):
-        return ORDEN_AREAS.index(clasificar_area(division_str))
 
     def truncar_texto(texto, max_len=28):
         s = str(texto or '').strip()
@@ -4065,18 +4099,6 @@ def generar_reporte_preliminares_pendientes_word():
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
-    ORDEN_AREAS = ['Ingeniería', 'Equipo Móvil', 'Otras / Sin Clasificar']
-
-    def clasificar_area(division_str):
-        d = str(division_str or '').lower()
-        if 'ingenier' in d:
-            return 'Ingeniería'
-        elif 'equipo móvil' in d or 'equipo movil' in d:
-            return 'Equipo Móvil'
-        return 'Otras / Sin Clasificar'
-
-    def indice_area(division_str):
-        return ORDEN_AREAS.index(clasificar_area(division_str))
 
     def truncar_texto(texto, max_len=28):
         s = str(texto or '').strip()
@@ -6021,8 +6043,10 @@ def vista_reportes():
 
         target_week_id = get_week_identifier(offset)
 
-        # 4.2 Llamada al motor de datos
-        df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos(forzar_sync, dias_semana_target)
+        # 4.2 Llamada al motor de datos (cacheada: st.tabs ejecuta el contenido de las
+        # 3 pestañas en cada clic, no solo la visible, y esta misma llamada se repite
+        # para Mensual más abajo con otro rango de fechas)
+        df_week, df_raw, ajustadores_validos = sincronizar_y_cargar_datos_cacheado(forzar_sync, dias_semana_target)
 
         tab_dashboard, tab_operacional, tab_gantt = st.tabs([
             "📈 Dashboard Ejecutivo (BI)",
@@ -6130,7 +6154,7 @@ def vista_reportes():
         ultimo_dia_mes = calendar.monthrange(anio_target, mes_target)[1]
         dias_mes_target = [datetime(anio_target, mes_target, d).date() for d in range(1, ultimo_dia_mes + 1)]
 
-        df_mes, df_mes_raw, ajustadores_validos_mes = sincronizar_y_cargar_datos(forzar_sync_mes, dias_mes_target)
+        df_mes, df_mes_raw, ajustadores_validos_mes = sincronizar_y_cargar_datos_cacheado(forzar_sync_mes, dias_mes_target)
 
         renderizar_reporte_mensual_hitos(ajustadores_validos_mes, target_month_id, mes_opcion)
         st.markdown("---")
