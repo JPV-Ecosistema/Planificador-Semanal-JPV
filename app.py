@@ -6204,6 +6204,49 @@ def vista_reportes():
 # BLOQUE PRINCIPAL: ENRUTADOR DE NAVEGACIÓN
 # ---------------------------------------------------------
 def main():
+    # --- ACCESO GENERAL A LA APP (opcional: solo se activa si hay 'app_password'
+    # configurada en Secrets). Sin esto, cualquiera con el link a la app en Streamlit
+    # Cloud puede ver y sobrescribir datos de asegurados y montos sin autenticarse. ---
+    import hmac
+    try:
+        app_password_secret = st.secrets.get("app_password")
+    except Exception:
+        app_password_secret = None
+
+    if app_password_secret and not st.session_state.get('acceso_general_ok'):
+        MAX_INTENTOS_ACCESO = 5
+        BLOQUEO_ACCESO_MINUTOS = 5
+        ahora_acceso = ahora_chile()
+        bloqueado_hasta_acceso = st.session_state.get('acceso_bloqueado_hasta')
+
+        st.title("🔒 Acceso restringido")
+        st.caption("Planificador Semanal JPV — ingresa la contraseña de acceso para continuar.")
+
+        if bloqueado_hasta_acceso and ahora_acceso < bloqueado_hasta_acceso:
+            minutos_restantes = int((bloqueado_hasta_acceso - ahora_acceso).total_seconds() // 60) + 1
+            st.error(f"🔒 Demasiados intentos fallidos. Intenta de nuevo en {minutos_restantes} minuto(s).")
+            st.stop()
+
+        if bloqueado_hasta_acceso:
+            st.session_state['acceso_bloqueado_hasta'] = None
+            st.session_state['acceso_intentos_fallidos'] = 0
+
+        acceso_pwd_input = st.text_input("Contraseña de acceso", type="password", key="acceso_pwd_input")
+        if st.button("Ingresar", key="btn_acceso_login"):
+            if hmac.compare_digest(str(acceso_pwd_input), str(app_password_secret)):
+                st.session_state['acceso_general_ok'] = True
+                st.session_state['acceso_intentos_fallidos'] = 0
+                st.rerun()
+            else:
+                intentos = st.session_state.get('acceso_intentos_fallidos', 0) + 1
+                st.session_state['acceso_intentos_fallidos'] = intentos
+                if intentos >= MAX_INTENTOS_ACCESO:
+                    st.session_state['acceso_bloqueado_hasta'] = ahora_acceso + timedelta(minutes=BLOQUEO_ACCESO_MINUTOS)
+                    st.error(f"🔒 Demasiados intentos fallidos. Acceso bloqueado por {BLOQUEO_ACCESO_MINUTOS} minutos.")
+                else:
+                    st.error(f"Contraseña incorrecta. Intento {intentos} de {MAX_INTENTOS_ACCESO}.")
+        st.stop()
+
     st.sidebar.image("https://img.icons8.com/color/96/000000/engineering.png", width=60)
     st.sidebar.title("Navegación OpsControl")
 
@@ -6224,19 +6267,39 @@ def main():
     # No aparece en el menú "Ir a:" hasta que se ingresa la contraseña correcta.
     with st.sidebar.expander("⚙️", expanded=False):
         if not st.session_state.get('es_admin'):
-            admin_pwd_input = st.text_input("Acceso administrador", type="password", key="admin_pwd_input")
-            if st.button("Ingresar", key="btn_admin_login"):
-                try:
-                    admin_pwd_secret = st.secrets.get("admin_password")
-                except Exception:
-                    admin_pwd_secret = None
-                if not admin_pwd_secret:
-                    st.error("El acceso de administrador no está configurado (falta 'admin_password' en Secrets).")
-                elif admin_pwd_input == admin_pwd_secret:
-                    st.session_state['es_admin'] = True
-                    st.rerun()
-                else:
-                    st.error("Contraseña incorrecta.")
+            import hmac
+            MAX_INTENTOS_ADMIN = 5
+            BLOQUEO_ADMIN_MINUTOS = 5
+            ahora_admin = ahora_chile()
+            bloqueado_hasta = st.session_state.get('admin_bloqueado_hasta')
+            if bloqueado_hasta and ahora_admin < bloqueado_hasta:
+                minutos_restantes = int((bloqueado_hasta - ahora_admin).total_seconds() // 60) + 1
+                st.error(f"🔒 Demasiados intentos fallidos. Intenta de nuevo en {minutos_restantes} minuto(s).")
+            else:
+                if bloqueado_hasta:
+                    # El bloqueo ya expiró: se limpia para no quedar comparando fechas vencidas en cada render.
+                    st.session_state['admin_bloqueado_hasta'] = None
+                    st.session_state['admin_intentos_fallidos'] = 0
+                admin_pwd_input = st.text_input("Acceso administrador", type="password", key="admin_pwd_input")
+                if st.button("Ingresar", key="btn_admin_login"):
+                    try:
+                        admin_pwd_secret = st.secrets.get("admin_password")
+                    except Exception:
+                        admin_pwd_secret = None
+                    if not admin_pwd_secret:
+                        st.error("El acceso de administrador no está configurado (falta 'admin_password' en Secrets).")
+                    elif hmac.compare_digest(str(admin_pwd_input), str(admin_pwd_secret)):
+                        st.session_state['es_admin'] = True
+                        st.session_state['admin_intentos_fallidos'] = 0
+                        st.rerun()
+                    else:
+                        intentos = st.session_state.get('admin_intentos_fallidos', 0) + 1
+                        st.session_state['admin_intentos_fallidos'] = intentos
+                        if intentos >= MAX_INTENTOS_ADMIN:
+                            st.session_state['admin_bloqueado_hasta'] = ahora_admin + timedelta(minutes=BLOQUEO_ADMIN_MINUTOS)
+                            st.error(f"🔒 Demasiados intentos fallidos. Acceso bloqueado por {BLOQUEO_ADMIN_MINUTOS} minutos.")
+                        else:
+                            st.error(f"Contraseña incorrecta. Intento {intentos} de {MAX_INTENTOS_ADMIN}.")
         else:
             st.success("Modo Administrador activo")
             if st.button("Salir del modo Administrador", key="btn_admin_logout"):
