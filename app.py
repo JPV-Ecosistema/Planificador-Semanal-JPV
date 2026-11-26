@@ -83,6 +83,98 @@ def calcular_caja_wip(df_realizados):
     df_wip = df_realizados[cond_wip].drop_duplicates(subset=['Ajustador', 'numero_caso'])
     return df_facturable, df_wip
 
+def calcular_conciliacion_mensual(ajustadores_validos, target_month_id, df_mes):
+    """Para cada ajustador, concilia lo comprometido en su Plan Mensual con lo
+    ejecutado en la semana que nunca pasó por ese plan ("Fuera del Plan"). La
+    usan tanto la vista en vivo (renderizar_reporte_mensual_hitos) como el
+    reporte Word/PPTX del mes, para que ambos muestren siempre los mismos
+    números. Devuelve una lista de dicts, uno por ajustador con Plan Mensual
+    registrado para ese mes."""
+    import pandas as pd
+    import pytz
+    from datetime import datetime
+
+    hoy_dt = datetime.now(pytz.timezone('America/Santiago')).date()
+    if df_mes is None:
+        df_mes = pd.DataFrame()
+
+    def _fuera_de_plan_ajustador(ajustador):
+        """Honorarios (UF) de casos Operativos Realizados en la semana para este
+        ajustador, dentro del mes, que NUNCA pasaron por el Plan Mensual (sin
+        id_mcl_origen válido). Se deduplica por caso: si un mismo caso tuvo más de
+        una acción Realizada en el mes, su honorario no debe contarse dos veces
+        -mismo criterio que calcular_caja_wip()-."""
+        if df_mes.empty or 'Ajustador' not in df_mes.columns:
+            return 0.0, 0, 0.0, 0
+        df_aj = df_mes[
+            (df_mes['Ajustador'].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()) &
+            (df_mes['categoria'] == 'Operativa') &
+            (df_mes['estado_cumplimiento'] == 'Realizado')
+        ]
+        if df_aj.empty:
+            return 0.0, 0, 0.0, 0
+        if 'id_mcl_origen' in df_aj.columns:
+            tiene_origen = df_aj['id_mcl_origen'].apply(_campo_valido)
+        else:
+            tiene_origen = pd.Series(False, index=df_aj.index)
+        df_fuera = df_aj[~tiene_origen].drop_duplicates(subset=['numero_caso'])
+        if df_fuera.empty:
+            return 0.0, 0, 0.0, 0
+        es_mcl = df_fuera['tramo_uf'].astype(str).str.contains('MCL|> 5', case=False, na=False)
+        uf_total = float(pd.to_numeric(df_fuera['honorarios_estimados'], errors='coerce').fillna(0).sum())
+        uf_mcl = float(pd.to_numeric(df_fuera[es_mcl]['honorarios_estimados'], errors='coerce').fillna(0).sum())
+        return uf_total, len(df_fuera), uf_mcl, int(es_mcl.sum())
+
+    filas = []
+    for ajustador in ajustadores_validos:
+        plan_mes = load_plan_mensual_local(ajustador, explicit_month_id=target_month_id)
+        if not plan_mes:
+            continue
+
+        comprometidos = len(plan_mes)
+        realizados = sum(1 for t in plan_mes if t.get('estado_cumplimiento') == 'Realizado')
+        vencidos_sin_agendar = 0
+        for t in plan_mes:
+            if t.get('estado_cumplimiento') == 'Realizado' or _campo_valido(t.get('agendado_semana')):
+                continue
+            try:
+                fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if fec_obj < hoy_dt:
+                vencidos_sin_agendar += 1
+
+        # --- Honorarios Realizados Según Plan (UF), deduplicado por caso ---
+        vistos = set()
+        uf_plan_realizado = 0.0
+        for t in plan_mes:
+            if t.get('estado_cumplimiento') != 'Realizado':
+                continue
+            caso = str(t.get('numero_caso', ''))
+            if caso in vistos:
+                continue
+            vistos.add(caso)
+            try:
+                uf_plan_realizado += float(t.get('honorarios_estimados', 0) or 0)
+            except (TypeError, ValueError):
+                pass
+
+        uf_fuera, cant_fuera, uf_fuera_mcl, cant_fuera_mcl = _fuera_de_plan_ajustador(ajustador)
+        pct_cumplimiento = (realizados / comprometidos * 100) if comprometidos > 0 else 0.0
+
+        filas.append({
+            'Ajustador': ajustador,
+            'Comprometidos': comprometidos,
+            'Realizados': realizados,
+            '% Cumplimiento': round(pct_cumplimiento, 1),
+            'Vencidos sin Agendar': vencidos_sin_agendar,
+            'Plan Realizado (UF)': round(uf_plan_realizado, 2),
+            'Fuera del Plan (UF)': round(uf_fuera, 2),
+            'Fuera del Plan — MCL (UF)': round(uf_fuera_mcl, 2),
+            'Flujo Total del Mes (UF)': round(uf_plan_realizado + uf_fuera, 2),
+        })
+    return filas
+
 def es_si(valor):
     """Compara un valor de la Base Maestra contra "Sí" tolerando mayúsculas, tildes
     y espacios (ej. 'Sí', 'SI', ' sí '). Un chequeo literal como "!= 'si'" trata "Sí"
@@ -4077,6 +4169,72 @@ def generar_reporte_entregables_word(df_week, week_id_obj, dias_semana_target=No
     else:
         doc.add_paragraph('No se registraron entregables de Informes en el período seleccionado.')
 
+    # --- FLUJO DEL MES: PLAN VS. FUERA DE PLAN (solo Mensual) — concilia lo
+    # comprometido/cumplido en el Plan Mensual de cada ajustador con lo ejecutado en
+    # la semana sobre casos que nunca pasaron por ese plan. Reutiliza
+    # calcular_conciliacion_mensual(), la misma función que usa la vista en vivo del
+    # Planificador Mensual, para que ambos muestren siempre los mismos números. ---
+    if tipo_periodo == "Mensual":
+        doc.add_page_break()
+        doc.add_heading('11. Flujo del Mes: Plan vs. Fuera de Plan', level=1)
+        doc.add_paragraph(
+            'Honorarios (UF) de lo comprometido y cumplido en el Plan Mensual de cada ajustador, '
+            'versus lo ejecutado en la semana sobre casos que nunca estuvieron en ese plan ("Fuera '
+            'del Plan"). El total de Fuera del Plan considera todos los casos; se desagrega además '
+            'por MCL para distinguir los casos de Mayor Complejidad y Monto de los demás.'
+        ).runs[0].font.italic = True
+
+        col_aj_flujo = 'Ajustador senior' if 'Ajustador senior' in df_bm.columns else (df_bm.columns[9] if df_bm.shape[1] > 9 else None)
+        ajustadores_flujo = sorted(df_bm[col_aj_flujo].dropna().unique()) if (not df_bm.empty and col_aj_flujo is not None) else []
+        primer_dia_mes = dias_semana_target[0] if dias_semana_target else None
+        target_month_id_flujo = f"{primer_dia_mes.year}_{primer_dia_mes.month:02d}" if primer_dia_mes else None
+
+        filas_conciliacion = (
+            calcular_conciliacion_mensual(ajustadores_flujo, target_month_id_flujo, df_week)
+            if (ajustadores_flujo and target_month_id_flujo) else []
+        )
+
+        if filas_conciliacion:
+            headers_flujo = ['Ajustador', 'Plan Realizado (UF)', 'Fuera del Plan (UF)', 'Fuera del Plan — MCL (UF)', 'Flujo Total del Mes (UF)']
+            table_flujo = doc.add_table(rows=1, cols=len(headers_flujo))
+            table_flujo.style = 'Table Grid'
+            hdr_cells = table_flujo.rows[0].cells
+            for i, col_name in enumerate(headers_flujo):
+                hdr_cells[i].text = col_name
+                run = hdr_cells[i].paragraphs[0].runs[0]
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(255, 255, 255)
+                run.font.size = Pt(8)
+                shading_elm = parse_xml(r'<w:shd {} w:fill="003366"/>'.format(nsdecls('w')))
+                hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+            for fila in sorted(filas_conciliacion, key=lambda f: f['Ajustador']):
+                row_cells = table_flujo.add_row().cells
+                row_cells[0].text = str(fila['Ajustador'])
+                row_cells[1].text = f"{fila['Plan Realizado (UF)']:,.2f}"
+                row_cells[2].text = f"{fila['Fuera del Plan (UF)']:,.2f}"
+                row_cells[3].text = f"{fila['Fuera del Plan — MCL (UF)']:,.2f}"
+                row_cells[4].text = f"{fila['Flujo Total del Mes (UF)']:,.2f}"
+                for j in range(len(headers_flujo)):
+                    if row_cells[j].paragraphs[0].runs:
+                        row_cells[j].paragraphs[0].runs[0].font.size = Pt(8)
+                    if j > 0:
+                        row_cells[j].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_paragraph('')
+
+            tot_plan = sum(f['Plan Realizado (UF)'] for f in filas_conciliacion)
+            tot_fuera = sum(f['Fuera del Plan (UF)'] for f in filas_conciliacion)
+            tot_fuera_mcl = sum(f['Fuera del Plan — MCL (UF)'] for f in filas_conciliacion)
+            tot_flujo = sum(f['Flujo Total del Mes (UF)'] for f in filas_conciliacion)
+            p_tot = doc.add_paragraph(
+                f"Totales: Plan Realizado {tot_plan:,.2f} UF  ·  Fuera del Plan {tot_fuera:,.2f} UF "
+                f"(de los cuales MCL {tot_fuera_mcl:,.2f} UF)  ·  Flujo Total del Mes {tot_flujo:,.2f} UF"
+            )
+            p_tot.runs[0].font.bold = True
+            p_tot.runs[0].font.size = Pt(9)
+        else:
+            doc.add_paragraph('No hay Planes Mensuales registrados para este período.')
+
     buffer = io.BytesIO()
     doc.save(buffer)
     return buffer.getvalue()
@@ -5133,6 +5291,17 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
             return 0.0, 0.0, 0.0, 0.0
         return tuple(num(x) for x in m.groups())
 
+    def filas_flujo_mes():
+        """Filas de la tabla de '11. Flujo del Mes: Plan vs. Fuera de Plan', una por
+        ajustador: (ajustador, plan_realizado, fuera_del_plan, fuera_mcl, flujo_total).
+        No se usa bloque(): esa sección tiene un párrafo de descripción ANTES de la
+        tabla con el mismo h1/h2/h3, y bloque() devolvería ese párrafo (sin tabla) en
+        vez de la tabla, al ser el primero en aparecer."""
+        for b in blocks:
+            if b['h1'] == '11. Flujo del Mes: Plan vs. Fuera de Plan' and b['table'] is not None:
+                return [(f[0], num(f[1]), num(f[2]), num(f[3]), num(f[4])) for f in b['table']['rows']]
+        return []
+
     MESES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
                 'septiembre', 'octubre', 'noviembre', 'diciembre']
     mes_ref = dias_mes_target[0] if dias_mes_target else datetime.now(pytz.timezone('America/Santiago')).date()
@@ -5371,6 +5540,46 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         txt(sl, f'UF planificadas: {up:,.2f}', x + 0.25, 3.95, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
         txt(sl, f'UF realizadas: {ur:,.2f}', x + 0.25, 4.25, ancho_panel - 0.5, 0.3, size=9.5, color=C_TEXT)
 
+    # ── Slide: Flujo del Mes: Plan vs. Fuera de Plan ──
+    sl = blank()
+    header(sl, 'Flujo del Mes: Plan vs. Fuera de Plan', subtitulo=mes_nombre)
+    slides_info.append((sl, 'Resumen Ejecutivo'))
+    txt(sl, 'Honorarios (UF) de lo comprometido/cumplido en el Plan Mensual de cada ajustador, versus lo '
+        'ejecutado en la semana sobre casos que nunca estuvieron en ese plan ("Fuera del Plan"). El total '
+        'considera todos los casos; se desagrega por MCL solo como detalle adicional.',
+        0.4, 0.72, 12.5, 0.5, size=10, italic=True, color=C_MID)
+
+    filas_flujo = filas_flujo_mes()
+    tot_plan_flujo = sum(f[1] for f in filas_flujo)
+    tot_fuera_flujo = sum(f[2] for f in filas_flujo)
+    tot_fuera_mcl_flujo = sum(f[3] for f in filas_flujo)
+    tot_fuera_no_mcl_flujo = tot_fuera_flujo - tot_fuera_mcl_flujo
+    tot_flujo_total = sum(f[4] for f in filas_flujo)
+
+    paneles_flujo = [
+        ('📋 PLAN REALIZADO', C_NAVY, f'{tot_plan_flujo:,.2f}', 'UF de hitos cumplidos del Plan Mensual'),
+        ('➕ FUERA DEL PLAN', C_GOLD, f'{tot_fuera_flujo:,.2f}', f'MCL: {tot_fuera_mcl_flujo:,.2f} UF  ·  No MCL: {tot_fuera_no_mcl_flujo:,.2f} UF'),
+        ('💰 FLUJO TOTAL DEL MES', C_GREEN, f'{tot_flujo_total:,.2f}', 'UF ejecutadas en el mes (plan + fuera de plan)'),
+    ]
+    ancho_panel_fl, gap_panel_fl, x0_fl = 3.9, 0.3, 0.4
+    for i, (titulo, color, valor, sub) in enumerate(paneles_flujo):
+        x = x0_fl + i * (ancho_panel_fl + gap_panel_fl)
+        rect(sl, x, 1.35, ancho_panel_fl, 1.85, fill=C_STEEL)
+        rect(sl, x, 1.35, ancho_panel_fl, 0.08, fill=color)
+        txt(sl, titulo, x + 0.25, 1.6, ancho_panel_fl - 0.5, 0.35, size=12, bold=True, color=color)
+        txt(sl, valor, x + 0.25, 2.05, ancho_panel_fl - 0.5, 0.7, size=28, bold=True, color=C_NAVY)
+        txt(sl, sub, x + 0.25, 2.75, ancho_panel_fl - 0.5, 0.4, size=8.5, color=C_SUB)
+
+    rows_flujo = [
+        [f[0], f'{f[1]:,.2f}', f'{f[2]:,.2f}', f'{f[3]:,.2f}', f'{f[4]:,.2f}']
+        for f in sorted(filas_flujo, key=lambda x: x[0])
+    ]
+    if rows_flujo:
+        tabla(sl, ['Ajustador', 'Plan Realizado (UF)', 'Fuera del Plan (UF)', '— MCL (UF)', 'Flujo Total (UF)'],
+              rows_flujo, 0.4, 3.5, 12.5, 3.1, hdr_color=C_NAVY, fuente=10)
+    else:
+        empty_state(sl, 'No hay Planes Mensuales registrados para este período.')
+
     # ── Slide: Resumen por Área ──
     sl = blank()
     header(sl, 'Resumen por Área', subtitulo=mes_nombre)
@@ -5561,94 +5770,12 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
 # ---------------------------------------------------------
 def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_opcion, df_mes=None):
     import pandas as pd
-    import pytz
     import streamlit as st
-    from datetime import datetime
 
     st.markdown("### 🎯 Cumplimiento de Hitos del Plan Mensual")
     st.info("Hitos comprometidos en el Plan Mensual de cada ajustador para este período: cuántos fueron Realizados y cuántos quedaron con fecha objetivo vencida sin haber sido incorporados a ninguna semana. Además, cuánto se ejecutó en la semana (en UF) sin que ese caso hubiera estado nunca en el Plan Mensual.")
 
-    hoy_dt = datetime.now(pytz.timezone('America/Santiago')).date()
-
-    if df_mes is None:
-        df_mes = pd.DataFrame()
-
-    def _fuera_de_plan_ajustador(ajustador):
-        """Honorarios (UF) de casos Operativos Realizados en la semana para este
-        ajustador, dentro del mes, que NUNCA pasaron por el Plan Mensual (sin
-        id_mcl_origen válido). Se deduplica por caso: si un mismo caso tuvo más de
-        una acción Realizada en el mes, su honorario no debe contarse dos veces
-        -mismo criterio que calcular_caja_wip()-."""
-        if df_mes.empty or 'Ajustador' not in df_mes.columns:
-            return 0.0, 0, 0.0, 0
-        df_aj = df_mes[
-            (df_mes['Ajustador'].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()) &
-            (df_mes['categoria'] == 'Operativa') &
-            (df_mes['estado_cumplimiento'] == 'Realizado')
-        ]
-        if df_aj.empty:
-            return 0.0, 0, 0.0, 0
-        if 'id_mcl_origen' in df_aj.columns:
-            tiene_origen = df_aj['id_mcl_origen'].apply(_campo_valido)
-        else:
-            tiene_origen = pd.Series(False, index=df_aj.index)
-        df_fuera = df_aj[~tiene_origen].drop_duplicates(subset=['numero_caso'])
-        if df_fuera.empty:
-            return 0.0, 0, 0.0, 0
-        es_mcl = df_fuera['tramo_uf'].astype(str).str.contains('MCL|> 5', case=False, na=False)
-        uf_total = float(pd.to_numeric(df_fuera['honorarios_estimados'], errors='coerce').fillna(0).sum())
-        uf_mcl = float(pd.to_numeric(df_fuera[es_mcl]['honorarios_estimados'], errors='coerce').fillna(0).sum())
-        return uf_total, len(df_fuera), uf_mcl, int(es_mcl.sum())
-
-    filas = []
-    for ajustador in ajustadores_validos:
-        plan_mes = load_plan_mensual_local(ajustador, explicit_month_id=target_month_id)
-        if not plan_mes:
-            continue
-
-        comprometidos = len(plan_mes)
-        realizados = sum(1 for t in plan_mes if t.get('estado_cumplimiento') == 'Realizado')
-        vencidos_sin_agendar = 0
-        for t in plan_mes:
-            if t.get('estado_cumplimiento') == 'Realizado' or _campo_valido(t.get('agendado_semana')):
-                continue
-            try:
-                fec_obj = datetime.strptime(t['fecha_compromiso'], "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if fec_obj < hoy_dt:
-                vencidos_sin_agendar += 1
-
-        # --- Honorarios Realizados Según Plan (UF), deduplicado por caso ---
-        vistos = set()
-        uf_plan_realizado = 0.0
-        for t in plan_mes:
-            if t.get('estado_cumplimiento') != 'Realizado':
-                continue
-            caso = str(t.get('numero_caso', ''))
-            if caso in vistos:
-                continue
-            vistos.add(caso)
-            try:
-                uf_plan_realizado += float(t.get('honorarios_estimados', 0) or 0)
-            except (TypeError, ValueError):
-                pass
-
-        uf_fuera, cant_fuera, uf_fuera_mcl, cant_fuera_mcl = _fuera_de_plan_ajustador(ajustador)
-
-        pct_cumplimiento = (realizados / comprometidos * 100) if comprometidos > 0 else 0.0
-
-        filas.append({
-            'Ajustador': ajustador,
-            'Comprometidos': comprometidos,
-            'Realizados': realizados,
-            '% Cumplimiento': round(pct_cumplimiento, 1),
-            'Vencidos sin Agendar': vencidos_sin_agendar,
-            'Plan Realizado (UF)': round(uf_plan_realizado, 2),
-            'Fuera del Plan (UF)': round(uf_fuera, 2),
-            'Fuera del Plan — MCL (UF)': round(uf_fuera_mcl, 2),
-            'Flujo Total del Mes (UF)': round(uf_plan_realizado + uf_fuera, 2),
-        })
+    filas = calcular_conciliacion_mensual(ajustadores_validos, target_month_id, df_mes)
 
     if not filas:
         st.warning(f"No hay Planes Mensuales registrados para «{mes_opcion}».")
