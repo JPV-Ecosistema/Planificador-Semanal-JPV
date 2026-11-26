@@ -5559,16 +5559,46 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
 # BLOQUE 4.0: ORQUESTADOR PRINCIPAL DE LA VISTA
 # VERSIÓN: 4.0.2 (Blindaje de identificación semanal)
 # ---------------------------------------------------------
-def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_opcion):
+def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_opcion, df_mes=None):
     import pandas as pd
     import pytz
     import streamlit as st
     from datetime import datetime
 
     st.markdown("### 🎯 Cumplimiento de Hitos del Plan Mensual")
-    st.info("Hitos comprometidos en el Plan Mensual de cada ajustador para este período: cuántos fueron Realizados y cuántos quedaron con fecha objetivo vencida sin haber sido incorporados a ninguna semana.")
+    st.info("Hitos comprometidos en el Plan Mensual de cada ajustador para este período: cuántos fueron Realizados y cuántos quedaron con fecha objetivo vencida sin haber sido incorporados a ninguna semana. Además, cuánto se ejecutó en la semana (en UF) sin que ese caso hubiera estado nunca en el Plan Mensual.")
 
     hoy_dt = datetime.now(pytz.timezone('America/Santiago')).date()
+
+    if df_mes is None:
+        df_mes = pd.DataFrame()
+
+    def _fuera_de_plan_ajustador(ajustador):
+        """Honorarios (UF) de casos Operativos Realizados en la semana para este
+        ajustador, dentro del mes, que NUNCA pasaron por el Plan Mensual (sin
+        id_mcl_origen válido). Se deduplica por caso: si un mismo caso tuvo más de
+        una acción Realizada en el mes, su honorario no debe contarse dos veces
+        -mismo criterio que calcular_caja_wip()-."""
+        if df_mes.empty or 'Ajustador' not in df_mes.columns:
+            return 0.0, 0, 0.0, 0
+        df_aj = df_mes[
+            (df_mes['Ajustador'].astype(str).str.strip().str.lower() == str(ajustador).strip().lower()) &
+            (df_mes['categoria'] == 'Operativa') &
+            (df_mes['estado_cumplimiento'] == 'Realizado')
+        ]
+        if df_aj.empty:
+            return 0.0, 0, 0.0, 0
+        if 'id_mcl_origen' in df_aj.columns:
+            tiene_origen = df_aj['id_mcl_origen'].apply(_campo_valido)
+        else:
+            tiene_origen = pd.Series(False, index=df_aj.index)
+        df_fuera = df_aj[~tiene_origen].drop_duplicates(subset=['numero_caso'])
+        if df_fuera.empty:
+            return 0.0, 0, 0.0, 0
+        es_mcl = df_fuera['tramo_uf'].astype(str).str.contains('MCL|> 5', case=False, na=False)
+        uf_total = float(pd.to_numeric(df_fuera['honorarios_estimados'], errors='coerce').fillna(0).sum())
+        uf_mcl = float(pd.to_numeric(df_fuera[es_mcl]['honorarios_estimados'], errors='coerce').fillna(0).sum())
+        return uf_total, len(df_fuera), uf_mcl, int(es_mcl.sum())
 
     filas = []
     for ajustador in ajustadores_validos:
@@ -5589,6 +5619,23 @@ def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_o
             if fec_obj < hoy_dt:
                 vencidos_sin_agendar += 1
 
+        # --- Honorarios Realizados Según Plan (UF), deduplicado por caso ---
+        vistos = set()
+        uf_plan_realizado = 0.0
+        for t in plan_mes:
+            if t.get('estado_cumplimiento') != 'Realizado':
+                continue
+            caso = str(t.get('numero_caso', ''))
+            if caso in vistos:
+                continue
+            vistos.add(caso)
+            try:
+                uf_plan_realizado += float(t.get('honorarios_estimados', 0) or 0)
+            except (TypeError, ValueError):
+                pass
+
+        uf_fuera, cant_fuera, uf_fuera_mcl, cant_fuera_mcl = _fuera_de_plan_ajustador(ajustador)
+
         pct_cumplimiento = (realizados / comprometidos * 100) if comprometidos > 0 else 0.0
 
         filas.append({
@@ -5597,6 +5644,10 @@ def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_o
             'Realizados': realizados,
             '% Cumplimiento': round(pct_cumplimiento, 1),
             'Vencidos sin Agendar': vencidos_sin_agendar,
+            'Plan Realizado (UF)': round(uf_plan_realizado, 2),
+            'Fuera del Plan (UF)': round(uf_fuera, 2),
+            'Fuera del Plan — MCL (UF)': round(uf_fuera_mcl, 2),
+            'Flujo Total del Mes (UF)': round(uf_plan_realizado + uf_fuera, 2),
         })
 
     if not filas:
@@ -5617,6 +5668,22 @@ def renderizar_reporte_mensual_hitos(ajustadores_validos, target_month_id, mes_o
     c4.metric("Vencidos sin Agendar", tot_vencidos, delta_color="inverse")
 
     st.dataframe(df_hitos, use_container_width=True, hide_index=True)
+
+    # --- Flujo del Mes: Plan vs. Fuera de Plan (UF) ---
+    tot_uf_plan = float(df_hitos['Plan Realizado (UF)'].sum())
+    tot_uf_fuera = float(df_hitos['Fuera del Plan (UF)'].sum())
+    tot_uf_fuera_mcl = float(df_hitos['Fuera del Plan — MCL (UF)'].sum())
+    tot_uf_fuera_no_mcl = tot_uf_fuera - tot_uf_fuera_mcl
+    tot_uf_flujo = float(df_hitos['Flujo Total del Mes (UF)'].sum())
+
+    st.markdown("#### 💰 Flujo del Mes: Plan vs. Fuera de Plan")
+    st.caption("«Fuera del Plan» son casos Operativos Realizados en la semana que nunca estuvieron en el Plan Mensual de este ajustador. Se desagrega por MCL para distinguir casos de Mayor Complejidad y Monto de los demás, pero el total (la métrica relevante del flujo del mes) considera todos los casos, no solo MCL.")
+    d1, d2, d3, d4, d5 = st.columns(5)
+    d1.metric("Plan Realizado (UF)", f"{tot_uf_plan:,.2f}")
+    d2.metric("Fuera del Plan (UF)", f"{tot_uf_fuera:,.2f}")
+    d3.metric("— de los cuales MCL (UF)", f"{tot_uf_fuera_mcl:,.2f}")
+    d4.metric("— de los cuales No MCL (UF)", f"{tot_uf_fuera_no_mcl:,.2f}")
+    d5.metric("Flujo Total del Mes (UF)", f"{tot_uf_flujo:,.2f}")
 
 
 def renderizar_reporte_mensual_entregables(df_mes, mes_opcion):
@@ -6156,7 +6223,7 @@ def vista_reportes():
 
         df_mes, df_mes_raw, ajustadores_validos_mes = sincronizar_y_cargar_datos_cacheado(forzar_sync_mes, dias_mes_target)
 
-        renderizar_reporte_mensual_hitos(ajustadores_validos_mes, target_month_id, mes_opcion)
+        renderizar_reporte_mensual_hitos(ajustadores_validos_mes, target_month_id, mes_opcion, df_mes)
         st.markdown("---")
         renderizar_reporte_mensual_entregables(df_mes, mes_opcion)
         st.markdown("---")
