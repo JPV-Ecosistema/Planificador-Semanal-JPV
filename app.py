@@ -5791,7 +5791,45 @@ def generar_reporte_ejecutivo_pptx(df_mes, mes_opcion, dias_mes_target):
         else:
             txt(sl, b['caption'], 0.6, 2.8, 12.1, 1.5, size=16, bold=True, color=C_NAVY, align=PP_ALIGN.CENTER)
 
+    def render_cobertura_consolidada(h1_cobertura):
+        """Las secciones 'Cobertura de Planificación del Mes — Ajustes/IFL' traen en
+        el Word dos gráficos de medidor (gauge) por alcance (General/Ingeniería/Equipo
+        Móvil), además de la frase de detalle. El parser de bloques solo lee texto, así
+        que esos gauges se pierden al pasar al PPTX y quedaban 4 diapositivas casi
+        vacías por sección (una intro + una por alcance, solo con una frase). Se
+        reemplazan por una única diapositiva de Respaldo con una tabla comparando los
+        3 alcances, usando los mismos datos ya parseados por cobertura()."""
+        intro = bloque(h1=h1_cobertura)
+        sl = blank()
+        header(sl, h1_cobertura[:95])
+        slides_info.append((sl, 'Respaldo'))
+        if intro and intro['caption']:
+            txt(sl, intro['caption'], 0.4, 0.72, 12.5, 0.5, size=10.5, italic=True, color=C_MID)
+        filas_cob = []
+        for alcance in ['General', 'Ingeniería', 'Equipo Móvil']:
+            cant_planif, cant_stock, uf_planif, uf_stock = cobertura(h1_cobertura, alcance)
+            if cant_stock == 0 and uf_stock == 0:
+                continue
+            pct_cant = (cant_planif / cant_stock * 100) if cant_stock else 0
+            pct_uf = (uf_planif / uf_stock * 100) if uf_stock else 0
+            filas_cob.append([
+                alcance, f'{cant_planif:.0f} / {cant_stock:.0f}', f'{pct_cant:.0f}%',
+                f'{uf_planif:,.2f} / {uf_stock:,.2f}', f'{pct_uf:.0f}%',
+            ])
+        if filas_cob:
+            tabla(sl, ['Alcance', 'Casos (Planif. / Vigentes)', '% Cant.', 'UF (Planif. / Vigentes)', '% UF'],
+                  filas_cob, 0.4, 1.5, 12.5, 2.2, hdr_color=C_NAVY, fuente=11)
+        else:
+            empty_state(sl, 'Sin casos vigentes para esta planificación.')
+
+    secciones_cobertura_vistas = set()
     for b in blocks:
+        h1b = b.get('h1') or ''
+        if h1b.startswith('Cobertura de Planificación'):
+            if h1b not in secciones_cobertura_vistas:
+                secciones_cobertura_vistas.add(h1b)
+                render_cobertura_consolidada(h1b)
+            continue
         if b['table'] is not None:
             render_tabla_block(b)
         else:
